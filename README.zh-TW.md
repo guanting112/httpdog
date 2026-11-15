@@ -9,6 +9,8 @@
 
 [English](README.md) | 繁體中文
 
+![動畫:access log 一行一行流過一隻用字元畫出來的狗。有一行符合規則時,狗會叫,下方的 journal 出現一則告警](docs/demo.gif)
+
 盯著網站的 access log,看到可疑或異常的請求就通知你。
 
 例如:

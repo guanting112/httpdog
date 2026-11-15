@@ -9,6 +9,8 @@
 
 English | [繁體中文](README.zh-TW.md)
 
+![Animation: access log lines flow past a dog drawn in characters. When a line matches a rule, the dog barks and an alert appears in the journal below](docs/demo.gif)
+
 Watches your website's access log and notifies you when it sees suspicious or abnormal requests.
 
 For example:
