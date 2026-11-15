@@ -106,6 +106,21 @@ On Fedora and Rocky Linux, where SELinux is enforcing:
 - **Without the policy file, nginx cannot reach the socket.** The first run there failed all 12 checks that need a log line from nginx, and the audit log showed one kind of denial: `sendto` on the socket, from `httpd_t` to `unconfined_service_t`. With `deploy/httpdog-selinux.cil` installed (the file is newer than the 0.2.0 tag) the same checks pass and no further denial is logged. Three checks were added for these two: the policy module is installed, nginx's log also arrives over UDP, and httpdog warns about UDP.
 - **The 3 checks that fail on Rocky Linux 9.8 are about the example rules of 0.2.0, not the socket.** Its default nginx configuration has `error_page 404 /404.html;`, so a request for `/.env` that ends in a 404 is logged with `uri` set to `/404.html`, and the `uri` rule of that `rules.example.yaml` does not match it. This is what `request_path` was added for in 0.2.1, and the example rules use it now; see [Things to watch out for](log-format.md#things-to-watch-out-for). The socket checks use a rule that also looks at `request_uri`, and pass.
 
+**The 0.2.1 release**
+
+Tested on 2026-11-16 on the two servers above that have SELinux enforcing, installed again by following the README, with the amd64 binary of the 0.2.1 release and the files of the `v0.2.1` tag, `deploy/httpdog-selinux.cil` among them.
+
+| Distribution | Kernel | systemd | nginx | Enforcing | Checks passed |
+|---|---|---|---|---|---|
+| Fedora 44 | 7.2.13 | 259 | 1.30.6 | SELinux | 70 of 70 |
+| Rocky Linux 9.8 | 5.14.0-687 | 252 | 1.20.1 | SELinux | 70 of 70 |
+
+- **`request_path`**: on Rocky Linux nginx still logs a request for `/.env` that ends in a 404 with `uri` set to `/404.html`, and the example rules, which now match `request_path`, raise the alert. The 3 checks that failed with 0.2.0 pass.
+- **SELinux**: with the policy file installed as the README says, every check that needs a log line from nginx passes and no denial is logged.
+- Before the release, the binary CI built for the same commit passed the same checks on both servers.
+
+The four Debian and Ubuntu servers were no longer running, so 0.2.1 was not installed on them. For those systems 0.2.1 differs from 0.2.0 in `request_path` and the example rules, which the unit tests and the smoke tests in CI cover.
+
 GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build.yml`): every check in `make ci`, then a musl static build on an amd64 runner and an arm64 runner, and the rule file checks and smoke tests again with the built binaries.
 
 **macOS (Apple Silicon, the development machine)**
@@ -123,6 +138,7 @@ GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build
 
 - The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
 - SELinux enforcing with a socket path other than the default, and with Apache.
+- The 0.2.1 release under systemd on Debian and Ubuntu, and on arm64.
 - amd64 outside a virtual machine.
 - Long-running operation and real production traffic.
 - A real external service as the webhook receiver.
