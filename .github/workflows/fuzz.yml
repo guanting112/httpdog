@@ -1,0 +1,43 @@
+# Fuzzes the log parsers and the rule engine with cargo-fuzz (libFuzzer). The log content comes
+# from requests, so it is input an attacker controls; see fuzz/fuzz_targets for what is checked.
+# A push or pull request runs every target for a minute, which mostly proves that the targets still
+# build and that the change did not break something obvious. The weekly run goes on for longer.
+name: fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "45 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    env:
+      # Seconds per target
+      FUZZTIME: ${{ github.event_name == 'schedule' && '900' || '60' }}
+    steps:
+      # Actions are always pinned to a commit SHA: a tag can be moved, a SHA cannot
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # libFuzzer's instrumentation needs the nightly compiler
+      - name: Install the nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked --version 0.13.2
+          cargo +nightly --version
+      - name: Fuzz every target
+        run: sh fuzz/run.sh "$FUZZTIME"
+      # The input that failed, so it can be replayed locally
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
+          if-no-files-found: ignore

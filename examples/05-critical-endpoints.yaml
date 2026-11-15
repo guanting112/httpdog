@@ -1,0 +1,94 @@
+# Scenario 5: business-critical paths
+#
+# For: sites with a few paths where a failure means lost revenue or an incident, such as checkout, payment callbacks, the admin area.
+# Their traffic is usually low and gets diluted under site-wide thresholds, so they are watched separately with very low thresholds.
+#
+# Fields needed: remote_addr, request_method, uri, status, request_time
+#
+# What you must change before using it:
+#   - Every path (/checkout, /api/orders, /payment/callback, /admin, /api/) is a placeholder;
+#     replace them with your site's real paths.
+#   - Replace the allow list in admin-unknown-source with the egress IPs of your office or VPN.
+#     httpdog has no CIDR matching; for a subnet make do with prefix (e.g. 10. or 192.168.1.).
+
+notifiers:
+  console:
+    type: stderr
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+rules:
+  # 5xx on checkout and the order API. Notify at 3 within a minute: every failure here is an order that did not go through
+  - id: checkout-errors
+    when:
+      all:
+        - any:
+            - { field: uri, op: prefix, value: /checkout }
+            - { field: uri, op: prefix, value: /api/orders }
+        - { field: status, op: gte, value: 500 }
+    threshold: { count: 3, window: 1m }
+    cooldown: 5m
+    notify: [console, ops]
+    message: "Checkout is failing, latest: {request_method} {uri} -> {status}"
+
+  # Payment callback failed (4xx or 5xx). The callback comes from the payment provider; a failure means the order status was not updated,
+  # and the provider usually retries only a few times, so a single failure notifies
+  - id: payment-callback-failed
+    when:
+      all:
+        - { field: uri, op: prefix, value: /payment/callback }
+        - { field: status, op: gte, value: 400 }
+    cooldown: 5m
+    notify: [console, ops]
+    message: "Payment callback failed: {request_method} {uri} -> {status} (from {remote_addr})"
+
+  # Payment callback too slow. Most providers have a timeout and treat anything slower as a failure to resend
+  - id: payment-callback-slow
+    when:
+      all:
+        - { field: uri, op: prefix, value: /payment/callback }
+        - { field: request_time, op: gt, value: 3 }
+    cooldown: 5m
+    notify: [console]
+    message: "Payment callback is slow: {uri} took {request_time}s"
+
+  # Someone got into the admin area from an IP outside the allow list (the response is not 4xx / 5xx).
+  # Blocked attempts (401 / 403) do not count; for those see scenarios 1 and 2
+  - id: admin-unknown-source
+    when:
+      all:
+        - { field: uri, op: prefix, value: /admin }
+        - { field: status, op: lt, value: 400 }
+        - not:
+            any:
+              - { field: remote_addr, op: prefix, value: "10." }
+              - { field: remote_addr, op: in, value: [203.0.113.10, 203.0.113.11] }
+    group_by: remote_addr
+    cooldown: 1h
+    notify: [console, ops]
+    message: "Unknown source {remote_addr} entered the admin area: {request_method} {uri} -> {status}"
+
+  # Delete operations in the admin area, every one recorded as an audit trail (cooldown: 0s means no merging)
+  - id: admin-destructive-action
+    when:
+      all:
+        - { field: request_method, op: eq, value: DELETE }
+        - any:
+            - { field: uri, op: prefix, value: /admin/ }
+            - { field: uri, op: prefix, value: /api/admin/ }
+    cooldown: 0s
+    notify: [console]
+    message: "{remote_addr} performed a delete: {uri} -> {status}"
+
+  # A sudden rise in API client errors. A common cause is a release that changed the interface, so requests from old app versions or partners start to fail
+  - id: api-client-errors-spike
+    when:
+      all:
+        - { field: uri, op: prefix, value: /api/ }
+        - { field: status, op: in, value: [400, 404, 422] }
+    threshold: { count: 100, window: 1m }
+    cooldown: 15m
+    notify: [ops]
+    message: "API client errors surging, latest: {request_method} {uri} -> {status}"

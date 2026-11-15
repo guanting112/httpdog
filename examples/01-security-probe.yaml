@@ -1,0 +1,91 @@
+# Scenario 1: security probing
+#
+# For: any public-facing site. It catches signs that someone is looking for holes: scans for sensitive files,
+# directory traversal, SQL injection probes, scanning tools, bursts of 404s.
+#
+# Fields needed: remote_addr, uri, request_uri, status, http_user_agent
+# (all in the log_format of deploy/nginx-snippet.conf)
+#
+# Tuning notes:
+#   - Public sites get scanned every day. These alerts are frequent and mostly need no action, so by default they only go to console (journald).
+#     The only one sent to the webhook is sensitive-file-exposed: a sensitive file really was read, and that always needs action.
+#   - Behind a CDN / reverse proxy, set up nginx's real_ip first, or remote_addr is always the proxy's IP.
+#   - The regexes are heuristics with misses and false positives. They tell you someone is trying; they do not block attacks.
+
+notifiers:
+  console:
+    type: stderr
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+rules:
+  # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked.
+  # Grouped by uri: one notification per file per hour, each file notified separately.
+  # &sensitive_paths below is a YAML anchor, so the next rule can reuse the same list with *sensitive_paths.
+  - id: sensitive-file-exposed
+    when:
+      all:
+        - any: &sensitive_paths
+            - { field: uri, op: suffix, value: /.env }
+            - { field: uri, op: prefix, value: /.git/ }
+            - { field: uri, op: prefix, value: /.aws/ }
+            - { field: uri, op: prefix, value: /.ssh/ }
+            - { field: uri, op: regex, value: '\.(sql|bak|old|swp|tar\.gz|zip)$' }
+        - { field: status, op: in, value: [200, 206] }
+    group_by: uri
+    cooldown: 1h
+    notify: [console, ops]
+    message: "Sensitive file read: {host}{uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
+
+  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes
+  - id: sensitive-file-probe
+    when:
+      any: *sensitive_paths
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} tried to access {uri} (status {status})"
+
+  # Directory traversal. Match request_uri: uri is the path after nginx normalizes it, with ../ already resolved
+  - id: path-traversal
+    when:
+      field: request_uri
+      op: regex
+      value: '(?i)(\.\./|\.\.%2f|%2e%2e(/|%2f)|/etc/passwd)'
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} possible directory traversal: {request_uri} (status {status})"
+
+  # SQL injection probes. request_uri again, because the parameters are in the query string
+  - id: sqli-probe
+    when:
+      field: request_uri
+      op: regex
+      value: '(?i)(union(\+|%20)+(all(\+|%20)+)?select|information_schema|sleep\(\d+\)|benchmark\()'
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} possible SQL injection: {request_uri} (status {status})"
+
+  # User-Agent of known scanning tools. A serious attacker changes it, so this only catches the laziest ones
+  - id: scanner-user-agent
+    when:
+      field: http_user_agent
+      op: regex
+      value: '(?i)(sqlmap|nikto|nmap|masscan|zgrab|nuclei|wpscan|dirbuster|gobuster|acunetix)'
+    group_by: remote_addr
+    cooldown: 1h
+    notify: [console]
+    message: "{remote_addr} is using a scanning tool: {http_user_agent}"
+
+  # Many 404s from one IP in a short time, usually brute-force path guessing
+  - id: not-found-scan
+    when: { field: status, op: eq, value: 404 }
+    group_by: remote_addr
+    threshold: { count: 30, window: 60s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} many 404s, latest: {uri}"

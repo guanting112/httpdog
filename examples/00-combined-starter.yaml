@@ -1,0 +1,104 @@
+# Starter template: works without changing the log format
+#
+# For: nginx or Apache using the default combined format (no log_format / LogFormat of your own).
+# Send the logs over or feed them in with --stdin and it runs; no rule needs its paths adjusted to your site.
+#
+# Try it first (no setup needed, replay an existing log):
+#   httpdog --stdin --config examples/00-combined-starter.yaml < /var/log/nginx/access.log
+#
+# The fields combined offers are fixed:
+#   remote_addr, remote_user, time_local, request, request_method, request_uri, uri,
+#   server_protocol, http_referer, http_user_agent (strings), status, body_bytes_sent (numbers)
+# There is no host and no request_time, so grouping by site and slow-request rules are not possible;
+# for those, switch to the JSON format in deploy/nginx-snippet.conf.
+# A rule that refers to a field that does not exist is rejected at load time.
+#
+# This file only notifies console (stderr / journald) and needs no environment variables.
+# To send to a webhook, add a webhook notifier as in rules.example.yaml and list it under notify in the rules.
+
+format: combined
+
+notifiers:
+  console:
+    type: stderr
+
+rules:
+  # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked. Act at once.
+  # &sensitive_paths is a YAML anchor, so the next rule can reuse the same list with *sensitive_paths
+  - id: sensitive-file-exposed
+    when:
+      all:
+        - any: &sensitive_paths
+            - { field: uri, op: suffix, value: /.env }
+            - { field: uri, op: prefix, value: /.git/ }
+            - { field: uri, op: prefix, value: /.aws/ }
+            - { field: uri, op: prefix, value: /.ssh/ }
+            - { field: uri, op: regex, value: '(?i)\.(sql|bak|old|swp|tar\.gz|zip)$' }
+        - { field: status, op: in, value: [200, 206] }
+    group_by: uri
+    cooldown: 1h
+    notify: [console]
+    message: "Sensitive file read: {uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
+
+  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes
+  - id: sensitive-file-probe
+    when:
+      any: *sensitive_paths
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} tried to access {uri} (status {status})"
+
+  # User-Agent of known scanning tools
+  - id: scanner-user-agent
+    when:
+      field: http_user_agent
+      op: regex
+      value: '(?i)(sqlmap|nikto|nmap|masscan|zgrab|nuclei|wpscan|dirbuster|gobuster|acunetix)'
+    group_by: remote_addr
+    cooldown: 1h
+    notify: [console]
+    message: "{remote_addr} is using a scanning tool: {http_user_agent}"
+
+  # Many 404s from one IP in a short time, usually brute-force path guessing
+  - id: not-found-scan
+    when: { field: status, op: eq, value: 404 }
+    group_by: remote_addr
+    threshold: { count: 30, window: 60s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} many 404s, latest: {request_uri}"
+
+  # Many 401 / 403 from one IP in a short time; possibly guessing passwords or probing permissions
+  - id: auth-failures
+    when: { field: status, op: in, value: [401, 403] }
+    group_by: remote_addr
+    threshold: { count: 30, window: 60s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} many auth failures, latest: {request_method} {uri} -> {status}"
+
+  # Site-wide 5xx surge
+  - id: server-errors
+    when: { field: status, op: gte, value: 500 }
+    threshold: { count: 50, window: 1m }
+    cooldown: 5m
+    notify: [console]
+    message: "5xx surge, latest: {request_method} {uri} -> {status}"
+
+  # Backend unreachable or timing out (502 / 503 / 504), usually the application is down or restarting
+  - id: gateway-errors
+    when: { field: status, op: in, value: [502, 503, 504] }
+    threshold: { count: 10, window: 30s }
+    cooldown: 5m
+    notify: [console]
+    message: "Backend not responding, latest: {request_method} {uri} -> {status}"
+
+  # One IP flooding: more than 300 requests in 10 seconds
+  - id: single-ip-flood
+    when: { field: remote_addr, op: exists }
+    group_by: remote_addr
+    threshold: { count: 300, window: 10s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} abnormal request volume, latest: {request_uri}"

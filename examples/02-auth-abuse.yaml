@@ -1,0 +1,92 @@
+# Scenario 2: login and account abuse
+#
+# For: sites with member login, sign-up, password reset or API keys. It catches attacks on accounts:
+# brute force, credential stuffing, password-reset mail abuse, mass sign-ups.
+#
+# Fields needed: remote_addr, request_method, uri, status
+#
+# What you must change before using it:
+#   - The paths (/login, /password/reset, /signup, /api/): replace them with your site's real paths.
+#   - How a failed login is detected. This assumes a failure returns 401 or 403. If your site returns 200
+#     and shows an error message, or redirects back to the login page with 302, the access log cannot tell success from failure;
+#     count POSTs to the login path instead (remove the status condition and raise the threshold).
+
+notifiers:
+  console:
+    type: stderr
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+rules:
+  # Brute force: the same IP fails to log in 20 times within 60 seconds
+  - id: login-bruteforce
+    when:
+      all:
+        - { field: uri, op: prefix, value: /login }
+        - { field: request_method, op: eq, value: POST }
+        - { field: status, op: in, value: [401, 403] }
+    group_by: remote_addr
+    threshold: { count: 20, window: 60s }
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} repeated login failures"
+
+  # Credential stuffing: the attacker uses many IPs with a few tries each, which the rule above misses,
+  # so this watches the site-wide total of failures. No grouping; set the threshold above the normal failure volume at peak hours
+  - id: credential-stuffing
+    when:
+      all:
+        - { field: uri, op: prefix, value: /login }
+        - { field: request_method, op: eq, value: POST }
+        - { field: status, op: in, value: [401, 403] }
+    threshold: { count: 200, window: 5m }
+    cooldown: 15m
+    notify: [ops]
+    message: "Abnormal site-wide login failures, latest from {remote_addr}"
+
+  # Password-reset mail abuse: the same IP sends 5 requests within 10 minutes
+  - id: password-reset-abuse
+    when:
+      all:
+        - { field: uri, op: prefix, value: /password/reset }
+        - { field: request_method, op: eq, value: POST }
+    group_by: remote_addr
+    threshold: { count: 5, window: 10m }
+    cooldown: 30m
+    notify: [console, ops]
+    message: "{remote_addr} many password reset requests"
+
+  # Mass sign-ups: the same IP submits 10 sign-ups within 10 minutes
+  - id: signup-burst
+    when:
+      all:
+        - { field: uri, op: prefix, value: /signup }
+        - { field: request_method, op: eq, value: POST }
+    group_by: remote_addr
+    threshold: { count: 10, window: 10m }
+    cooldown: 30m
+    notify: [console]
+    message: "{remote_addr} many sign-ups"
+
+  # API auth failures: a wrong key, an expired token, or someone guessing keys
+  - id: api-unauthorized
+    when:
+      all:
+        - { field: uri, op: prefix, value: /api/ }
+        - { field: status, op: in, value: [401, 403] }
+    group_by: remote_addr
+    threshold: { count: 50, window: 60s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} many API auth failures, latest: {request_method} {uri} -> {status}"
+
+  # A client that keeps hitting the rate limit (429) and does not stop. Requires nginx's limit_req_status or the backend to return 429
+  - id: rate-limited
+    when: { field: status, op: eq, value: 429 }
+    group_by: remote_addr
+    threshold: { count: 100, window: 60s }
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} keeps getting rate limited, latest: {uri}"

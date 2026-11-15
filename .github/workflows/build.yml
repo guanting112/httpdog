@@ -1,0 +1,169 @@
+name: build
+
+# Every push: run the tests and build static binaries for amd64 and arm64 (kept as workflow artifacts).
+# A tag starting with v (e.g. v0.1.0): once all of the above pass, publish the binaries as a Release.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      # Actions are always pinned to a commit SHA: a tag can be moved, a SHA cannot
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+          rustc --version
+      # For a release tag, check the version and the CHANGELOG first and stop before building if they are wrong
+      - name: Check the tag version and the CHANGELOG
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: .github/release-notes.sh "$TAG"
+      # Format, clippy, unit tests, --check on every example rule file, smoke tests on both sample logs
+      - run: make ci
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    # Each architecture builds on its own runner, no cross-compiling: the TLS dependency (ring) contains C and assembly,
+    # and cross-compiling it needs a whole extra toolchain
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+      BIN: target/${{ matrix.target }}/release/httpdog
+      ASSET: httpdog-linux-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust and the musl toolchain
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$TARGET"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+          rustc --version
+      # musl = statically linked, so the download runs on any Ubuntu release.
+      # --locked: build with the versions in Cargo.lock, so dependencies cannot change silently at build time
+      - name: Build the static binary
+        run: cargo build --release --locked --target "$TARGET"
+      - name: Check that it is statically linked
+        run: |
+          file "$BIN"
+          ls -l "$BIN"
+          if ldd "$BIN" 2>&1 | grep -q '=>'; then
+            echo "::error::$BIN is not statically linked"
+            ldd "$BIN"
+            exit 1
+          fi
+      # The binary must actually run on this architecture, not merely compile
+      - name: Smoke test with the built binary
+        env:
+          HTTPDOG_WEBHOOK_URL: http://127.0.0.1:9/x
+          HTTPDOG_WEBHOOK_SECRET: dummy-secret-for-tests
+        run: |
+          "$BIN" --version
+          for f in rules.example.yaml examples/*.yaml; do
+            printf '%s: ' "$f"
+            "$BIN" --check --config "$f" 2>&1
+          done
+          expect() { # rule file, log file, expected ALERT count
+            out=$("$BIN" --stdin --config "$1" < "$2" 2>&1)
+            printf '%s\n' "$out"
+            n=$(printf '%s\n' "$out" | grep -c '^ALERT' || true)
+            if [ "$n" -ne "$3" ]; then
+              echo "::error::$2 expected $3 ALERT lines, got $n"
+              exit 1
+            fi
+          }
+          expect rules.example.yaml sample.log 3
+          expect examples/00-combined-starter.yaml sample.combined.log 4
+      - name: Prepare the files to upload
+        run: |
+          mkdir -p dist
+          cp "$BIN" "dist/$ASSET"
+          cd dist && sha256sum "$ASSET" | tee "$ASSET.sha256"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the Release
+      id-token: write # sign the build provenance
+      attestations: write # store the build provenance
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      # Only CHANGELOG.md and the notes script are needed; the Release is created with GH_TOKEN, not git credentials
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Extract this version's notes from CHANGELOG.md
+        run: .github/release-notes.sh "$TAG" > "$RUNNER_TEMP/notes.md"
+      # What gets published is the very file the build job compiled and smoke-tested; nothing is rebuilt
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: httpdog-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          # First use the checksums from the build job to confirm the files did not change in transit
+          cat httpdog-linux-*.sha256 | sha256sum --check
+          rm httpdog-linux-*.sha256
+          sha256sum httpdog-linux-* | tee SHA256SUMS
+          ls -l
+      # SHA256SUMS sits next to the binaries, so it only catches corruption. This proves a binary was
+      # built by this workflow from this repository: gh attestation verify <file> -R guanting112/httpdog
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        with:
+          subject-path: dist/httpdog-linux-*
+      # The same attestation as a release asset, so it can be verified with
+      # gh attestation verify --bundle, and Scorecard sees a signed release.
+      - name: Attach the attestation bundle
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/httpdog.sigstore.json
+      - name: Create the Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/httpdog-linux-amd64 dist/httpdog-linux-arm64 dist/SHA256SUMS \
+            dist/httpdog.sigstore.json \
+            --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"

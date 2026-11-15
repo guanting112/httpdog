@@ -1,0 +1,26 @@
+[package]
+name = "httpdog"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Watches nginx / Apache access logs and sends alerts based on a rule file"
+
+[dependencies]
+regex = "1"
+# HMAC-SHA256 for webhook signatures. ureq's TLS (rustls) already pulls in ring,
+# so this only refers to the same copy directly and adds no new crate
+ring = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+signal-hook = "0.4"
+# Default features such as cookies and gzip are off; only TLS and JSON are kept
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+# A panic in any thread ends the whole process and leaves the restart to systemd,
+# which avoids the silent failure where the notifier thread is dead but the main program lives on
+panic = "abort"
