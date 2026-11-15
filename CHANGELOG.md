@@ -4,6 +4,12 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-16
+
+### Fixed
+
+- Memory was not given back after a burst of distinct groups. A rule with `group_by` keeps a counter for every group it is counting. The counters were removed once they expired, but the table that held them stayed at its largest size until the next restart: 500,000 groups left about 80 MB behind. The table now shrinks when it empties.
+
 ## [0.2.1] - 2026-11-16
 
 Fixes two problems found by installing 0.2.0 on servers at a cloud provider. Each could leave a site without alerts it should have had.
@@ -67,7 +73,8 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/guanting112/httpdog/releases/tag/v0.2.2
 [0.2.1]: https://github.com/guanting112/httpdog/releases/tag/v0.2.1
 [0.2.0]: https://github.com/guanting112/httpdog/releases/tag/v0.2.0
 [0.1.0]: https://github.com/guanting112/httpdog/releases/tag/v0.1.0

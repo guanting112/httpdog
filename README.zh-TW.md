@@ -119,7 +119,7 @@ systemctl status httpdog
 
 補充:
 
-- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.2.1`。
+- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.2.2`。
 - `SHA256SUMS` 跟執行檔放在一起,只能發現下載過程中損壞的檔案。要確認執行檔真的是這個 repo 的 workflow 編出來的,可以驗證它的建置來源證明(有簽章)。每個 Release 都附有 `httpdog.sigstore.json`,用它驗證時 `gh` 不需要登入 GitHub:
 
   ```bash
@@ -373,7 +373,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
   -c, --config <檔案>  規則檔,預設 ./rules.yaml
       --check          只驗證規則檔,不啟動
       --stdin          從 stdin 讀 log,不開 socket
-  -V, --version        印出版本(例如 httpdog 0.2.1)後結束
+  -V, --version        印出版本(例如 httpdog 0.2.2)後結束
 ```
 
 `--stdin` 有兩個用途:

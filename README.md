@@ -119,7 +119,7 @@ systemctl status httpdog
 
 Notes:
 
-- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.1` in both URLs of step 1.
+- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.2` in both URLs of step 1.
 - `SHA256SUMS` only catches a corrupted download, because it sits next to the binaries. To prove that a binary was built by this repository's workflow, verify its signed build provenance. Each release carries it as `httpdog.sigstore.json`, so `gh` needs no GitHub login:
 
   ```bash
@@ -374,7 +374,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
   -c, --config <file>  rule file, default ./rules.yaml
       --check          validate the rule file and exit
       --stdin          read logs from stdin instead of listening on a socket
-  -V, --version        print the version (e.g. httpdog 0.2.1) and exit
+  -V, --version        print the version (e.g. httpdog 0.2.2) and exit
 ```
 
 `--stdin` has two uses:

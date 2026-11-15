@@ -15,6 +15,9 @@ use std::{
 
 const DEFAULT_COOLDOWN: Duration = Duration::from_secs(60);
 const RAW_PREVIEW_CHARS: usize = 300;
+/// The state table is left alone while it has room for no more groups than this; see `sweep`.
+/// At 80 bytes a slot that is a few hundred kilobytes, not worth resizing for
+const SHRINK_ABOVE: usize = 4096;
 /// The name overload alerts use in messages and in the structured body; matches the overload key of the rule file
 const OVERLOAD_ID: &str = "overload";
 /// The name used when the rule file has no instance
@@ -198,6 +201,8 @@ impl Engine {
     /// Sweep expired state regularly; otherwise every IP ever seen keeps an entry in memory forever
     pub fn sweep(&mut self, now: Instant) {
         let rules = &self.rules;
+        // Read before removing anything: capacity() counts the slots of removed entries as used
+        let capacity = self.state.capacity();
         self.state.retain(|(idx, _), st| {
             let rule = &rules[*idx];
             if let Some((_, window)) = rule.threshold {
@@ -214,6 +219,15 @@ impl Engine {
                 .is_some_and(|t| now.duration_since(t) < rule.cooldown);
             cooling || !st.hits.is_empty()
         });
+
+        // A HashMap grows on its own but never shrinks: removing entries leaves the table at its largest size.
+        // After a burst of distinct groups (500,000 of them leave about 80 MB behind) that memory would stay
+        // taken until the next restart, so hand it back. Room for four times the groups that are left is kept,
+        // and shrink_to does nothing unless that is less than what the table has: a table that empties and
+        // fills again every minute under a steady load is mostly left as it is
+        if capacity > SHRINK_ABOVE {
+            self.state.shrink_to(self.state.len() * 4);
+        }
     }
 
     /// Report logs the input side dropped because the queue was full. `dropped` is the number dropped since the last call.
@@ -735,6 +749,69 @@ mod tests {
         assert_eq!(e.state.len(), 1, "counts inside the window must be kept");
         e.sweep(t0 + Duration::from_secs(11));
         assert_eq!(e.state.len(), 0, "expired state must be swept");
+    }
+
+    #[test]
+    fn sweep_gives_the_table_back_after_a_burst() {
+        let mut e = engine(&format!(
+            "{BASE}
+  - id: r
+    when: {{ field: uri, op: exists }}
+    group_by: uri
+    threshold: {{ count: 5, window: 10s }}
+    notify: [out]
+"
+        ));
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let burst = |e: &mut Engine, tag: &str, n: usize, now: Instant| {
+            for i in 0..n {
+                e.process(&json!({ "uri": format!("/{tag}/{i}") }), "", now);
+            }
+        };
+
+        // 50,000 distinct groups arrive at once
+        burst(&mut e, "a", 50_000, at(0));
+        let peak = e.state.capacity();
+        assert!(peak >= 50_000);
+
+        // While they are still counting, nothing is given back
+        e.sweep(at(5));
+        assert_eq!(e.state.len(), 50_000);
+        assert_eq!(e.state.capacity(), peak);
+
+        // A few groups stay busy while the burst expires: they survive, and the table shrinks around them
+        burst(&mut e, "b", 100, at(9));
+        e.sweep(at(11));
+        assert_eq!(
+            e.state.len(),
+            100,
+            "the groups still inside the window are kept"
+        );
+        assert!(
+            e.state.capacity() < peak / 10,
+            "the table kept {} slots for 100 groups",
+            e.state.capacity()
+        );
+        // and they keep counting: the fifth hit inside the window still fires
+        for _ in 0..3 {
+            assert!(e.process(&json!({"uri": "/b/7"}), "", at(12)).is_empty());
+        }
+        assert_eq!(e.process(&json!({"uri": "/b/7"}), "", at(12)).len(), 1);
+
+        // Everything has expired, the group that fired included (its cooldown is the default minute)
+        e.sweep(at(80));
+        assert_eq!(e.state.len(), 0);
+        assert!(e.state.capacity() <= SHRINK_ABOVE);
+
+        // A table of ordinary size is left alone, so a normal site does not resize it every minute
+        burst(&mut e, "c", 2_000, at(100));
+        assert!(e.state.capacity() <= SHRINK_ABOVE);
+        e.sweep(at(111));
+        assert_eq!(e.state.len(), 0);
+        // capacity() counts the slots of removed entries as used until the table is rebuilt, so it reads a
+        // little lower than before; a table that had been shrunk would read 0
+        assert!(e.state.capacity() >= 2_000);
     }
 
     const OVERLOAD: &str = "notifiers: { out: { type: stderr } }\nrules: []\noverload:\n";

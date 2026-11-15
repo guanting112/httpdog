@@ -8,6 +8,7 @@ httpdog is kept simple on purpose. These are the current trade-offs.
 
 - **Thresholds use the time a log is received**, not the time inside the log. It makes no difference for live monitoring, but when old logs are replayed with `--stdin` every line arrives at once, so threshold rules fire more easily than they really would have.
 - **State is in memory only** and is lost on restart, so the same thing may be notified again after a restart.
+- **Every group a rule is counting takes memory, and their number has no cap.** A rule with `group_by` keeps a counter for each distinct value until its window and cooldown have passed: about 370 bytes plus the length of the value. Grouping by IP stays small. Grouping by something a client chooses freely, such as `request_path`, grows with the number of distinct values that arrive in that time; in the measurement below 500,000 distinct paths took about 185 MB until they expired.
 - **A reload resets counters and cooldowns**, including the dropped count that `overload` accumulated during a cooldown and has not reported yet.
 
 **Receiving logs**
@@ -127,6 +128,25 @@ GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build
 
 - Tested: build, clippy, unit tests, smoke tests on both sample logs.
 - `overload` alerts, reload with a broken rule file, the webhook body and signature, and `combined` logs from the Apache 2.4 bundled with macOS were also tested here before the Linux run above.
+
+**Memory**
+
+Measured on 2026-11-16 in an OrbStack machine with static arm64 binaries: the 0.2.1 release, and a build of the source that became 0.2.2. Lines were fed through `--stdin` and the resident memory of the process was read after each step.
+
+| After | 0.2.1 | 0.2.2 |
+|---|---|---|
+| Starting | 2.2 MB | 1.8 MB |
+| 4,000,000 lines that match no rule | 2.3 MB | 1.9 MB |
+| 300,000 lines that each raise an alert | 0.8 MB | 1.9 MB |
+| 500,000 distinct groups being counted | 186.5 MB | 186.4 MB |
+| Those groups expired and were swept | 84.3 MB | 3.1 MB |
+| 500,000 other distinct groups | 186.4 MB | 186.2 MB |
+| Those expired and were swept | 84.3 MB | 3.1 MB |
+| 2,000,000 more lines that match no rule | 84.4 MB | 3.1 MB |
+
+- A line that matches nothing, and a line that raises an alert, leave nothing behind.
+- The second 500,000 groups peak where the first did, so expired counters are released and their memory is used again.
+- With 0.2.1 the emptied table kept about 80 MB until restart; 0.2.2 shrinks it.
 
 **Fuzzing**
 
