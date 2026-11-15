@@ -1,6 +1,7 @@
 //! Input formats: turn one log line into the event (a JSON object) the rule engine works on.
 //!
-//! - json: the log line is already JSON (nginx writes it with `log_format ... escape=json`)
+//! - json: the log line is already JSON (nginx writes it with `log_format ... escape=json`).
+//!   One field is added to what the line carries: `request_path`, see `add_request_path`
 //! - combined: the default combined format of nginx / Apache, parsed into the same field names as the json variant,
 //!   so one rule works for both formats (except for fields combined does not have)
 //!
@@ -18,6 +19,7 @@ pub const COMBINED_FIELDS: &[&str] = &[
     "request",
     "request_method",
     "request_uri",
+    "request_path",
     "uri",
     "server_protocol",
     "status",
@@ -39,8 +41,29 @@ pub fn parse(format: Format, line: &str) -> Option<(Value, &str)> {
 /// so parsing starts at the first `{` and the syslog header before it is ignored.
 fn parse_json(line: &str) -> Option<(Value, &str)> {
     let raw = line[line.find('{')?..].trim_end();
-    let event: Value = serde_json::from_str(raw).ok()?;
-    event.is_object().then_some((event, raw))
+    let mut event: Value = serde_json::from_str(raw).ok()?;
+    add_request_path(event.as_object_mut()?);
+    Some((event, raw))
+}
+
+/// `request_path` is the path the client asked for: `request_uri` without the query string.
+///
+/// Rules need it because nginx's `$uri` is the path nginx ended up serving, not the one that was requested.
+/// A front controller (`try_files ... /index.php`) or a custom error page (`error_page 404 /404.html`)
+/// replaces it, so a probe for `/.env` that gets a 404 is logged with `uri` set to `/404.html`.
+/// `request_uri` is the original but carries the query string, which rules out `eq` and `suffix`.
+///
+/// Like `uri` of the combined format, it is not decoded or normalized. A `request_path` that the log line
+/// already has (the user's own log_format) is left alone, and nothing is added when `request_uri` is
+/// missing or not a string.
+fn add_request_path(event: &mut Map<String, Value>) {
+    if event.contains_key("request_path") {
+        return;
+    }
+    if let Some(Value::String(request_uri)) = event.get("request_uri") {
+        let path = request_uri.split('?').next().unwrap_or_default().to_owned();
+        event.insert("request_path".to_owned(), path.into());
+    }
 }
 
 /// One combined line:
@@ -76,6 +99,9 @@ fn parse_combined(line: &str) -> Option<(Value, &str)> {
     put("time_local", time_local.into());
     put("request_method", method.into());
     put("request_uri", request_uri.into());
+    // The same value twice: with this format both come from the request line. Rules written for the json
+    // format, where the two differ, then work here unchanged
+    put("request_path", uri.into());
     put("uri", uri.into());
     put("server_protocol", protocol.into());
     put("status", status.into());
@@ -197,6 +223,37 @@ mod tests {
     }
 
     #[test]
+    fn json_gets_the_requested_path() {
+        let json = |line: &str| parse(Format::Json, line).unwrap().0;
+
+        // What nginx logs for a probe that ends in a custom 404 page: uri is the error page
+        let ev = json(r#"{"uri":"/404.html","request_uri":"/.env?x=1&y=/a?b","status":404}"#);
+        assert_eq!(ev["request_path"], "/.env");
+        assert_eq!(ev["uri"], "/404.html");
+        assert_eq!(ev["request_uri"], "/.env?x=1&y=/a?b");
+
+        assert_eq!(json(r#"{"request_uri":"/a/b"}"#)["request_path"], "/a/b");
+        assert_eq!(json(r#"{"request_uri":"?x=1"}"#)["request_path"], "");
+        // Not decoded and not normalized: it is what the client sent
+        assert_eq!(
+            json(r#"{"request_uri":"/a/../%2eenv?x"}"#)["request_path"],
+            "/a/../%2eenv"
+        );
+
+        // A log_format that already has the key keeps its own value
+        let ev = json(r#"{"request_uri":"/a?b","request_path":"/mine"}"#);
+        assert_eq!(ev["request_path"], "/mine");
+        // Nothing to derive it from
+        assert!(json(r#"{"uri":"/a"}"#).get("request_path").is_none());
+        assert!(json(r#"{"request_uri":5}"#).get("request_path").is_none());
+        assert!(
+            json(r#"{"request_uri":null}"#)
+                .get("request_path")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn combined_line_has_the_same_field_names_as_json() {
         let line = r#"203.0.113.7 - alice [11/Nov/2026:13:50:01 +0800] "GET /products?page=2 HTTP/1.1" 200 5120 "https://example.com/" "Mozilla/5.0 (X11; Linux x86_64)""#;
         let (ev, raw) = parse(Format::Combined, line).unwrap();
@@ -210,6 +267,7 @@ mod tests {
                 "request": "GET /products?page=2 HTTP/1.1",
                 "request_method": "GET",
                 "request_uri": "/products?page=2",
+                "request_path": "/products",
                 "uri": "/products",
                 "server_protocol": "HTTP/1.1",
                 "status": 200,

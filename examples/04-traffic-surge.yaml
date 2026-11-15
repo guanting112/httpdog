@@ -3,7 +3,8 @@
 # For: finding out who is behind a sudden traffic surge and where it lands. It catches site-wide peaks, one IP flooding,
 # one endpoint being hammered, crawlers and scripts, and abnormally large responses.
 #
-# Fields needed: remote_addr, uri, body_bytes_sent, http_user_agent
+# Fields needed: remote_addr, request_uri, body_bytes_sent, http_user_agent
+# (request_path is request_uri without the query string; httpdog adds it)
 #
 # Tuning notes:
 #   - These thresholds need the most tuning per site. Estimate your normal requests per 10 seconds from journalctl
@@ -32,7 +33,7 @@ rules:
     threshold: { count: 5000, window: 10s }
     cooldown: 5m
     notify: [ops]
-    message: "Site-wide traffic surge, latest: {host}{uri}"
+    message: "Site-wide traffic surge, latest: {host}{request_path}"
 
   # One IP flooding: more than 300 requests in 10 seconds
   - id: single-ip-flood
@@ -41,29 +42,29 @@ rules:
     threshold: { count: 300, window: 10s }
     cooldown: 10m
     notify: [ops]
-    message: "{remote_addr} abnormal request volume, latest: {uri}"
+    message: "{remote_addr} abnormal request volume, latest: {request_path}"
 
-  # One endpoint being hammered: when many IPs hit the same path the rule above misses it, so this groups by uri
+  # One endpoint being hammered: when many IPs hit the same path the rule above misses it, so this groups by path
   - id: hot-endpoint
-    when: { field: uri, op: exists }
-    group_by: uri
+    when: { field: request_path, op: exists }
+    group_by: request_path
     threshold: { count: 2000, window: 10s }
     cooldown: 10m
     notify: [console]
-    message: "{host}{uri} is being hammered"
+    message: "{host}{request_path} is being hammered"
 
   # Expensive endpoints (search, export) called over and over by one IP. A few requests to these can bring the backend down,
   # so the threshold is far below normal traffic. Use the resource-hungry paths of your own site
   - id: expensive-endpoint-abuse
     when:
       any:
-        - { field: uri, op: prefix, value: /search }
-        - { field: uri, op: prefix, value: /api/export }
+        - { field: request_path, op: prefix, value: /search }
+        - { field: request_path, op: prefix, value: /api/export }
     group_by: remote_addr
     threshold: { count: 30, window: 60s }
     cooldown: 10m
     notify: [console, ops]
-    message: "{remote_addr} is calling {uri} heavily"
+    message: "{remote_addr} is calling {request_path} heavily"
 
   # The default User-Agent of scripts and libraries, in volume. A little is normal (monitoring, partner integrations)
   - id: scripted-client-flood
@@ -84,7 +85,7 @@ rules:
     threshold: { count: 50, window: 60s }
     cooldown: 30m
     notify: [console]
-    message: "{remote_addr} many requests with no User-Agent, latest: {uri}"
+    message: "{remote_addr} many requests with no User-Agent, latest: {request_path}"
 
   # A single response over 100 MB: someone may be bulk downloading, or an API forgot to paginate
   - id: large-response
@@ -92,4 +93,4 @@ rules:
     group_by: remote_addr
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} downloaded {body_bytes_sent} bytes: {uri}"
+    message: "{remote_addr} downloaded {body_bytes_sent} bytes: {request_path}"

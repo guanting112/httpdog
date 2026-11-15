@@ -4,6 +4,7 @@
 # directory traversal, SQL injection probes, scanning tools, bursts of 404s.
 #
 # Fields needed: remote_addr, uri, request_uri, status, http_user_agent
+# (request_path is request_uri without the query string; httpdog adds it)
 # (all in the log_format of deploy/nginx-snippet.conf)
 #
 # Tuning notes:
@@ -22,12 +23,13 @@ notifiers:
 
 rules:
   # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked.
+  # It matches uri, the file nginx actually served: a request nginx answered with something else (the index.html
+  # of a single-page app, say) does not count, and an encoded path such as /%2eenv still does.
   # Grouped by uri: one notification per file per hour, each file notified separately.
-  # &sensitive_paths below is a YAML anchor, so the next rule can reuse the same list with *sensitive_paths.
   - id: sensitive-file-exposed
     when:
       all:
-        - any: &sensitive_paths
+        - any:
             - { field: uri, op: suffix, value: /.env }
             - { field: uri, op: prefix, value: /.git/ }
             - { field: uri, op: prefix, value: /.aws/ }
@@ -39,14 +41,21 @@ rules:
     notify: [console, ops]
     message: "Sensitive file read: {host}{uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
 
-  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes
+  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes.
+  # It matches request_path, the path that was asked for, so it still fires when the answer is an error page
+  # (with error_page 404 /404.html, uri would be /404.html). Keep this list the same as the one above
   - id: sensitive-file-probe
     when:
-      any: *sensitive_paths
+      any:
+        - { field: request_path, op: suffix, value: /.env }
+        - { field: request_path, op: prefix, value: /.git/ }
+        - { field: request_path, op: prefix, value: /.aws/ }
+        - { field: request_path, op: prefix, value: /.ssh/ }
+        - { field: request_path, op: regex, value: '\.(sql|bak|old|swp|tar\.gz|zip)$' }
     group_by: remote_addr
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} tried to access {uri} (status {status})"
+    message: "{remote_addr} tried to access {request_path} (status {status})"
 
   # Directory traversal. Match request_uri: uri is the path after nginx normalizes it, with ../ already resolved
   - id: path-traversal
@@ -88,4 +97,4 @@ rules:
     threshold: { count: 30, window: 60s }
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} many 404s, latest: {uri}"
+    message: "{remote_addr} many 404s, latest: {request_path}"

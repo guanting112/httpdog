@@ -1,0 +1,12 @@
+; SELinux policy for httpdog. Needed where SELinux is enforcing: Fedora, RHEL, Rocky Linux, AlmaLinux.
+;
+; nginx runs in the httpd_t domain. httpdog has no domain of its own, so it runs in unconfined_service_t.
+; Without this rule SELinux does not let nginx send its access log to httpdog's unix socket: no log line
+; arrives, and nginx's error log shows "connect() failed (13: Permission denied)".
+;
+; The rule allows that one thing and nothing else: a process in httpd_t may send a datagram to a unix
+; socket of a service in unconfined_service_t. The permissions of the socket file still apply on top of it.
+;
+; Install:  sudo semodule -i httpdog-selinux.cil
+; Remove:   sudo semodule -r httpdog-selinux
+(allow httpd_t unconfined_service_t (unix_dgram_socket (sendto)))

@@ -2,7 +2,8 @@
 #
 # For: knowing the site is in trouble before users complain. It catches a dead backend, slow responses and failing health checks.
 #
-# Fields needed: host, request_method, uri, status, request_time
+# Fields needed: host, request_method, request_uri, status, request_time
+# (request_path is request_uri without the query string; httpdog adds it)
 #
 # Tuning notes:
 #   - Set the thresholds against your normal traffic. On a low-traffic site lower count, or it never accumulates.
@@ -26,7 +27,7 @@ rules:
     threshold: { count: 50, window: 1m }
     cooldown: 5m
     notify: [ops]
-    message: "5xx surge, latest: {request_method} {host}{uri} -> {status}"
+    message: "5xx surge, latest: {request_method} {host}{request_path} -> {status}"
 
   # Backend unreachable or timing out (502 Bad Gateway / 503 / 504 Gateway Timeout).
   # Usually the application is down or restarting, so the threshold is more sensitive than the rule above
@@ -35,7 +36,7 @@ rules:
     threshold: { count: 10, window: 30s }
     cooldown: 5m
     notify: [ops]
-    message: "Backend not responding, latest: {request_method} {host}{uri} -> {status}"
+    message: "Backend not responding, latest: {request_method} {host}{request_path} -> {status}"
 
   # When several sites share one nginx, find which site is failing. Delete this rule if you have a single site
   - id: host-5xx
@@ -44,17 +45,17 @@ rules:
     threshold: { count: 20, window: 1m }
     cooldown: 10m
     notify: [console]
-    message: "High 5xx rate on {host}, latest: {uri} -> {status}"
+    message: "High 5xx rate on {host}, latest: {request_path} -> {status}"
 
   # A single very slow request (over 5 seconds), excluding the export feature that is slow by design
   - id: slow-request
     when:
       all:
         - { field: request_time, op: gt, value: 5 }
-        - not: { field: uri, op: prefix, value: /export/ }
+        - not: { field: request_path, op: prefix, value: /export/ }
     cooldown: 5m
     notify: [console]
-    message: "{uri} took {request_time}s"
+    message: "{request_path} took {request_time}s"
 
   # Slow across the board: 30 requests over 2 seconds within a minute. One slow request may be a one-off;
   # many usually mean trouble in the database or the backend
@@ -63,17 +64,17 @@ rules:
     threshold: { count: 30, window: 1m }
     cooldown: 10m
     notify: [ops]
-    message: "Responses are slow across the board, latest: {uri} took {request_time}s"
+    message: "Responses are slow across the board, latest: {request_path} took {request_time}s"
 
   # The health check endpoint did not return 200. Use the path your load balancer or monitoring really calls
   - id: healthcheck-failing
     when:
       all:
-        - { field: uri, op: eq, value: /healthz }
+        - { field: request_path, op: eq, value: /healthz }
         - { field: status, op: ne, value: 200 }
     cooldown: 5m
     notify: [ops]
-    message: "Health check failed: {host}{uri} -> {status}"
+    message: "Health check failed: {host}{request_path} -> {status}"
 
   # 499 is an nginx-only status code: the client gave up waiting and closed the connection.
   # A burst usually means the backend is slow enough for users to give up, and it often shows before 5xx does
@@ -82,4 +83,4 @@ rules:
     threshold: { count: 30, window: 1m }
     cooldown: 10m
     notify: [console]
-    message: "Many clients disconnected early (499), latest: {uri} after waiting {request_time}s"
+    message: "Many clients disconnected early (499), latest: {request_path} after waiting {request_time}s"

@@ -31,7 +31,7 @@ rules:
   - id: login-bruteforce
     when:
       all:
-        - { field: uri, op: prefix, value: /login }
+        - { field: request_path, op: prefix, value: /login }
         - { field: request_method, op: eq, value: POST }
         - { field: status, op: in, value: [401, 403] }
     group_by: remote_addr
@@ -102,7 +102,7 @@ Combine conditions with `all` (every one holds), `any` (at least one holds) and 
 when:
   all:
     - { field: request_time, op: gt, value: 5 }
-    - not: { field: uri, op: prefix, value: /export/ }
+    - not: { field: request_path, op: prefix, value: /export/ }
     - any:
         - { field: host, op: eq, value: example.com }
         - { field: host, op: suffix, value: .example.com }
@@ -141,7 +141,7 @@ Only `regex` can ignore case: put `(?i)` at the start of the pattern, or wrap ju
 
 When rewriting, remember to put a backslash before characters that are special in a regex, such as `.`, `?` and `+`.
 
-The case of `uri`, `request_uri` and `http_user_agent` is up to the client, and attackers often mix case on purpose, so take extra care when matching these fields.
+The case of `request_path`, `uri`, `request_uri` and `http_user_agent` is up to the client, and attackers often mix case on purpose, so take extra care when matching these fields.
 
 ## overload: alerts when falling behind
 
@@ -188,4 +188,4 @@ The 6 templates under `examples/` are listed in the [README](../README.md#ready-
 - **`01` to `05` all refer to `HTTPDOG_WEBHOOK_URL` and `HTTPDOG_WEBHOOK_SECRET`**; set both environment variables before checking the rule file. `00` only writes to the system log and needs neither.
 - **`01` to `05` only use fields from `deploy/nginx-snippet.conf`**, so they work once nginx is set up that way.
 - **`01` to `05` also work with `combined`**: add a `format: combined` line at the top of the file. `01`, `02` and `04` work as they are. `host-5xx`, `slow-request` and `slow-burst` in `03` and `payment-callback-slow` in `05` use fields `combined` does not have and fail at load time, so delete those rules first. `{host}` and `{request_time}` in messages show as `-`.
-- **Most templates match paths with `uri`.** On a site that uses `try_files ... /index.php` (common with Laravel and WordPress), switch to `request_uri`; see [log-format.md](log-format.md#things-to-watch-out-for) for why.
+- **The templates match paths with `request_path`**, the path the client asked for, so they work on a site with a front controller (`try_files ... /index.php`) or custom error pages. The one exception is `sensitive-file-exposed`, which matches `uri`, the file nginx actually served; see [log-format.md](log-format.md#things-to-watch-out-for) for the difference.

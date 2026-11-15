@@ -4,6 +4,24 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-16
+
+Fixes two problems found by installing 0.2.0 on servers at a cloud provider. Each could leave a site without alerts it should have had.
+
+### Fixed
+
+- **The example rules missed probes on sites with a custom error page or a front controller.** They matched paths with `uri`, which nginx replaces: with `error_page 404 /404.html;` (the default configuration of Rocky Linux 9 has it) a request for `/.env` that ends in a 404 is logged with `uri` set to `/404.html`, and with `try_files ... /index.php` every request has `uri` set to `/index.php`. `rules.example.yaml` and the templates under `examples/` now match paths with the new `request_path`. `sensitive-file-exposed` still matches `uri` on purpose: it is about the file nginx actually served. Rules of your own that match `uri` behave as before; switch them to `request_path` if your site has either of the two.
+- **With SELinux enforcing, nginx could not send its log to the unix socket**, so no alert was ever raised. This is the default state of Fedora, RHEL and Rocky Linux. The new `deploy/httpdog-selinux.cil` holds the one rule that allows it; install it with `sudo semodule -i httpdog-selinux.cil`.
+
+### Added
+
+- `request_path`: the path the client asked for, which is `request_uri` without the query string. With the JSON format httpdog adds it to every log line that has `request_uri`, so nginx's `log_format` needs no change; the `combined` format has it too, with the same value as `uri`. The webhook body carries it in `event`.
+
+### Documentation
+
+- `docs/log-format.md` explains the three path fields (`request_path`, `request_uri`, `uri`) and when to use which.
+- `docs/limits.md` lists the six cloud servers 0.2.0 was installed on, including two with SELinux enforcing.
+
 ## [0.2.0] - 2026-11-16
 
 ### Changed (incompatible)
@@ -49,6 +67,7 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/guanting112/httpdog/releases/tag/v0.2.1
 [0.2.0]: https://github.com/guanting112/httpdog/releases/tag/v0.2.0
 [0.1.0]: https://github.com/guanting112/httpdog/releases/tag/v0.1.0

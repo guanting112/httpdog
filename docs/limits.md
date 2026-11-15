@@ -80,6 +80,32 @@ On Debian 11 the nginx packages could not be downloaded that day (the security m
 - **UDP**: works with the unit file unchanged; prints the warning for a loopback address and the stronger one for `0.0.0.0`; `nobody` can send a line that raises an alert, which is what the warning is about.
 - **Mistakes**: a reload with a changed `listen` says it is not applied; a socket path without `unix:` ends with exit status 78 and is not restarted; a wrong group in the unit file fails with `chgrp: invalid group`.
 
+**The 0.2.0 release on cloud servers**
+
+Tested on 2026-11-16 on freshly installed servers at a cloud provider. Each is an amd64 KVM virtual machine running the distribution's own kernel, with the distribution's default AppArmor or SELinux setting left as it was. httpdog was installed by following the README, with the amd64 binary of the 0.2.0 release and the files of the `v0.2.0` tag.
+
+| Distribution | Kernel | systemd | nginx | Enforcing | Checks passed |
+|---|---|---|---|---|---|
+| Ubuntu 22.04 | 5.15.0-185 | 249 | 1.18.0 | AppArmor | 67 of 67 |
+| Ubuntu 24.04 | 6.8.0-149 | 255 | 1.24.0 | AppArmor | 67 of 67 |
+| Ubuntu 26.04 | 7.0.0-43 | 259 | 1.28.3 | AppArmor | 67 of 67 |
+| Debian 13 | 6.12.113 | 257 | 1.26.3 | AppArmor | 67 of 67 |
+| Fedora 44 | 7.2.13 | 259 | 1.30.6 | SELinux | 70 of 70 |
+| Rocky Linux 9.8 | 5.14.0-687 | 252 | 1.20.1 | SELinux | 67 of 70 |
+
+What was checked on all of them:
+
+- **The release**: the binary matches `SHA256SUMS`, reports 0.2.0 and is statically linked; every file the README fetches exists at the tag; the example rule file and the 6 templates pass `--check`; both smoke tests fire the expected number of alerts. The signed build provenance of both release binaries was verified with `gh attestation verify` on the development machine.
+- **The README install**: the unit is active, enabled and `Type=notify`, and listens on the unix socket without a `listen` line; a real request through nginx raises the alert of `rules.example.yaml`.
+- **webhook**: the receiver from [webhook.md](webhook.md#receiver-example) accepts httpdog's request and rejects one with a wrong signature; with the receiver down the alert is tried 3 times and given up; neither the URL nor the secret appears in the journal.
+- **The unix socket input**: the same 36 checks as in the table above.
+- **systemd**: the watchdog restarts a frozen process (`SIGSTOP`) after 32 seconds and the new socket is handed to nginx's group again; `systemctl stop` exits cleanly; a broken rule file and a missing secret each end with exit status 78 and are not restarted.
+
+On Fedora and Rocky Linux, where SELinux is enforcing:
+
+- **Without the policy file, nginx cannot reach the socket.** The first run there failed all 12 checks that need a log line from nginx, and the audit log showed one kind of denial: `sendto` on the socket, from `httpd_t` to `unconfined_service_t`. With `deploy/httpdog-selinux.cil` installed (the file is newer than the 0.2.0 tag) the same checks pass and no further denial is logged. Three checks were added for these two: the policy module is installed, nginx's log also arrives over UDP, and httpdog warns about UDP.
+- **The 3 checks that fail on Rocky Linux 9.8 are about the example rules of 0.2.0, not the socket.** Its default nginx configuration has `error_page 404 /404.html;`, so a request for `/.env` that ends in a 404 is logged with `uri` set to `/404.html`, and the `uri` rule of that `rules.example.yaml` does not match it. This is what `request_path` was added for in 0.2.1, and the example rules use it now; see [Things to watch out for](log-format.md#things-to-watch-out-for). The socket checks use a rule that also looks at `request_uri`, and pass.
+
 GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build.yml`): every check in `make ci`, then a musl static build on an amd64 runner and an arm64 runner, and the rule file checks and smoke tests again with the built binaries.
 
 **macOS (Apple Silicon, the development machine)**
@@ -95,8 +121,8 @@ GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build
 
 **Not verified**
 
-- The distributions' own kernels, and SELinux in enforcing mode. With SELinux enforcing, nginx may need a policy that lets it write to the socket; this has not been tried.
-- The unix socket input with the binaries CI builds, on amd64, and on Ubuntu 26.04, Debian 12 / 13 and Fedora.
-- amd64 on real hardware under systemd (the amd64 machine above was emulated; CI runs the amd64 binary's smoke tests on a real amd64 runner).
+- The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
+- SELinux enforcing with a socket path other than the default, and with Apache.
+- amd64 outside a virtual machine.
 - Long-running operation and real production traffic.
 - A real external service as the webhook receiver.

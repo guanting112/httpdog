@@ -71,7 +71,7 @@ A webhook has this one body. There is no setting to switch it.
 | `hits` | Number or null | Hits accumulated within the threshold window. null when the rule has no `threshold` |
 | `window_secs` | Number or null | Length of the threshold window in seconds |
 | `dropped` | Number or null | Set only for `overload` alerts: how many lines this report covers |
-| `event` | Object or null | The log line that triggered the alert; see [log-format.md](log-format.md) for the fields. For a threshold rule it is the last line, the one that reached the count; null for `overload` alerts |
+| `event` | Object or null | The log line that triggered the alert; see [log-format.md](log-format.md) for the fields. With the JSON format it also has `request_path`, which httpdog adds. For a threshold rule it is the last line, the one that reached the count; null for `overload` alerts |
 
 - **`message`, `group` and `event` hold the values as they are in the log**, which a client can choose. Unlike `text`, they may contain newlines or other control characters; JSON encoding keeps them safe in transit, but escape them before writing them to a log or a terminal.
 - **Every key is always present**, with null where it does not apply, so the receiver never has to handle a missing key. The order of keys is not guaranteed.

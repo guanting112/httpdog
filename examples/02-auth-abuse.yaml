@@ -3,7 +3,8 @@
 # For: sites with member login, sign-up, password reset or API keys. It catches attacks on accounts:
 # brute force, credential stuffing, password-reset mail abuse, mass sign-ups.
 #
-# Fields needed: remote_addr, request_method, uri, status
+# Fields needed: remote_addr, request_method, request_uri, status
+# (request_path is request_uri without the query string; httpdog adds it)
 #
 # What you must change before using it:
 #   - The paths (/login, /password/reset, /signup, /api/): replace them with your site's real paths.
@@ -24,7 +25,7 @@ rules:
   - id: login-bruteforce
     when:
       all:
-        - { field: uri, op: prefix, value: /login }
+        - { field: request_path, op: prefix, value: /login }
         - { field: request_method, op: eq, value: POST }
         - { field: status, op: in, value: [401, 403] }
     group_by: remote_addr
@@ -38,7 +39,7 @@ rules:
   - id: credential-stuffing
     when:
       all:
-        - { field: uri, op: prefix, value: /login }
+        - { field: request_path, op: prefix, value: /login }
         - { field: request_method, op: eq, value: POST }
         - { field: status, op: in, value: [401, 403] }
     threshold: { count: 200, window: 5m }
@@ -50,7 +51,7 @@ rules:
   - id: password-reset-abuse
     when:
       all:
-        - { field: uri, op: prefix, value: /password/reset }
+        - { field: request_path, op: prefix, value: /password/reset }
         - { field: request_method, op: eq, value: POST }
     group_by: remote_addr
     threshold: { count: 5, window: 10m }
@@ -62,7 +63,7 @@ rules:
   - id: signup-burst
     when:
       all:
-        - { field: uri, op: prefix, value: /signup }
+        - { field: request_path, op: prefix, value: /signup }
         - { field: request_method, op: eq, value: POST }
     group_by: remote_addr
     threshold: { count: 10, window: 10m }
@@ -74,13 +75,13 @@ rules:
   - id: api-unauthorized
     when:
       all:
-        - { field: uri, op: prefix, value: /api/ }
+        - { field: request_path, op: prefix, value: /api/ }
         - { field: status, op: in, value: [401, 403] }
     group_by: remote_addr
     threshold: { count: 50, window: 60s }
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} many API auth failures, latest: {request_method} {uri} -> {status}"
+    message: "{remote_addr} many API auth failures, latest: {request_method} {request_path} -> {status}"
 
   # A client that keeps hitting the rate limit (429) and does not stop. Requires nginx's limit_req_status or the backend to return 429
   - id: rate-limited
@@ -89,4 +90,4 @@ rules:
     threshold: { count: 100, window: 60s }
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} keeps getting rate limited, latest: {uri}"
+    message: "{remote_addr} keeps getting rate limited, latest: {request_path}"

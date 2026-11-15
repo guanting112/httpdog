@@ -5,7 +5,7 @@ httpdog understands two log formats; pick one with `format` at the top of the ru
 | | `format: json` (default) | `format: combined` |
 |---|---|---|
 | What changes on the web server | nginx gets a `log_format` block | nginx gets one line; Apache uses a pipe |
-| Available fields | You decide; the default setup has 10 | A fixed 12, without `host` and `request_time` |
+| Available fields | You decide; the default setup has 10, and httpdog adds `request_path` | A fixed 13, without `host` and `request_time` |
 | A mistyped field name | Cannot be detected; the rule just never matches | Rejected at load time |
 
 Fields with the same name mean the same thing in both formats, so most rules work with either.
@@ -18,7 +18,7 @@ Fields with the same name mean the same thing in both formats, so most rules wor
 
 ## JSON format
 
-Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }` (shown in the [README](../README.md#option-2-json)). The fields a rule can use are **the keys of the JSON on each log line**: httpdog has no built-in fields, and what is available is decided entirely by nginx's `log_format`. The default setup has these 10:
+Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }` (shown in the [README](../README.md#option-2-json)). The fields a rule can use are **the keys of the JSON on each log line**: what is available is decided by nginx's `log_format`. The default setup has these 10, and httpdog adds one of its own, `request_path`:
 
 | Field | Type | nginx variable | Content | Example |
 |---|---|---|---|---|
@@ -27,6 +27,7 @@ Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }` (shown
 | `request_method` | String | `$request_method` | HTTP method, upper case | `POST` |
 | `uri` | String | `$uri` | Normalized path, without the query string | `/products` |
 | `request_uri` | String | `$request_uri` | The original path the client sent, with the query string, not decoded | `/products?page=2` |
+| `request_path` | String | none: httpdog takes it from `request_uri` | The path the client asked for: `request_uri` without the query string, not decoded | `/products` |
 | `status` | Number | `$status` | Response status code | `404` |
 | `request_time` | Number | `$request_time` | Seconds spent on the request, with millisecond precision | `0.042` |
 | `body_bytes_sent` | Number | `$body_bytes_sent` | Bytes in the response body, headers not included | `5120` |
@@ -38,8 +39,17 @@ Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }` (shown
 - **A mistyped name is not an error.** When httpdog loads the rules it does not know which fields the logs will have, so a typo such as `field: stauts` passes validation and simply never matches. After writing a rule, replay a real log with `--stdin` to confirm that it fires.
 - **Names must match exactly**, including case (`Status` is not `status`).
 - **Only top-level keys work.** Nested paths such as `geo.country` are not supported.
-- **`uri` versus `request_uri`**: `uri` is the normalized path without the query string; `request_uri` is exactly what the client sent, with the query string. Use `request_uri` to match parameters.
-- **`uri` is the path after nginx's internal redirects.** On a site that hands requests to a front controller with `try_files ... /index.php` (common with Laravel and WordPress), every line has `uri` set to `/index.php`. On such a site match paths with `request_uri`; it carries the query string, so use `prefix` or `regex` rather than `eq` / `suffix`.
+- **Match paths with `request_path`.** There are three fields for the path and they answer different questions:
+
+  | Field | What it is | Use it for |
+  |---|---|---|
+  | `request_path` | The path the client asked for, without the query string | Matching paths: `/login`, `/.env`, `/admin/` |
+  | `request_uri` | The same, with the query string | Parameters, and patterns such as `../` |
+  | `uri` | The path nginx ended up serving: decoded and normalized, after internal redirects | What was really served, such as a sensitive file that was read |
+
+- **`request_path` needs `request_uri` in the `log_format`.** httpdog cuts it out of that field, so a `log_format` without `request_uri` has no `request_path`, and a rule on it never matches. A key named `request_path` that your own `log_format` writes is left as it is.
+- **`request_path` is what the client sent**, not decoded and not normalized: a request for `/%2eenv` or `/a/../.env` has exactly that as its `request_path`. nginx decodes and resolves those before choosing a file, and that result is `uri`.
+- **`uri` is the path after nginx's internal redirects.** On a site that hands requests to a front controller with `try_files ... /index.php` (common with Laravel and WordPress), every line has `uri` set to `/index.php`. A custom error page does the same to failed requests: with `error_page 404 /404.html;`, which the default nginx configuration of Rocky Linux 9 has, a request that ends in a 404 is logged with `uri` set to `/404.html`, so a rule that looks for `/.env` in `uri` does not see a probe that got a 404. `request_path` is not affected by either, which is why the example rules match paths with it.
 - **An empty string counts as present.** For a request without a Referer, `http_referer` is `""` and `exists` still holds. To catch empty values write `{ field: http_referer, op: eq, value: "" }`.
 
 ### Adding fields
@@ -62,7 +72,7 @@ This is the default access log format of nginx and Apache:
 
 Write `format: combined` at the top of the rule file and httpdog parses it directly; no `log_format` is needed on the web server. For nginx see the [README](../README.md#option-1-the-default-format-combined), for Apache see [below](#apache). `examples/00-combined-starter.yaml` is a starter rule file that works as it is.
 
-The fields are a fixed 12:
+The fields are a fixed 13:
 
 | Field | Type | Content | Example |
 |---|---|---|---|
@@ -72,6 +82,7 @@ The fields are a fixed 12:
 | `request` | String | The full request line | `GET /products?page=2 HTTP/1.1` |
 | `request_method` | String | HTTP method | `GET` |
 | `request_uri` | String | Path with the query string | `/products?page=2` |
+| `request_path` | String | Path without the query string; the same value as `uri` | `/products` |
 | `uri` | String | Path without the query string | `/products` |
 | `server_protocol` | String | HTTP version | `HTTP/1.1` |
 | `status` | Number | Response status code | `404` |
@@ -83,9 +94,9 @@ The fields are a fixed 12:
 
 - **There is no `host` and no `request_time`**; `combined` simply does not record them. Grouping by site and slow-request rules are therefore not possible. Switch to the JSON format if you need them.
 - **Field names are checked at load time.** A name in `field` or `group_by` that is not in the table above (a typo, or `host` / `request_time`) is rejected. Names in `message` are not checked; a wrong one shows as `-`.
-- **`uri` is cut out of the request line**: everything after `?` is removed, without nginx's normalization. Encodings such as `%2F` are not decoded and `../` is not resolved. The upside is that `try_files` has no effect on it: you see the path the client sent.
+- **`uri` and `request_path` are the same value, cut out of the request line**: everything after `?` is removed, without nginx's normalization. Both exist so that a rule written for the JSON format, where they differ, works here unchanged. Encodings such as `%2F` are not decoded and `../` is not resolved. The upside is that `try_files` has no effect on it: you see the path the client sent.
 - **`-` always becomes an empty string**, the same as a missing header in the JSON format.
-- **When the request line is invalid** (an empty request, garbage, a TLS handshake sent to the HTTP port), `request_method`, `request_uri` and `uri` are empty strings and the original content stays in `request`.
+- **When the request line is invalid** (an empty request, garbage, a TLS handshake sent to the HTTP port), `request_method`, `request_uri`, `request_path` and `uri` are empty strings and the original content stays in `request`.
 - **Extra fields at the end are ignored.** httpdog does not read fields such as `$request_time` that you append after `combined`; use the JSON format when you need them.
 - **Apache's `common` format works too** (it lacks Referer and User-Agent); those two fields are empty strings.
 
@@ -138,6 +149,7 @@ access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname htt
 
 - **Only the owner and the group of the socket file can write to it** (mode `0660`), and root. httpdog creates the file, so at first that means httpdog alone. `deploy/httpdog.service` then gives the file to the group nginx's workers run as (the `ExecStartPost` line, run as root right after httpdog starts). httpdog itself does not join that group, so it gains no access to the web server's files.
 - **The group in the unit file is `www-data`**, which is right for Debian and Ubuntu. Where nginx's workers run as another group (`nginx` on Fedora and Rocky Linux, or whatever `user` in `nginx.conf` says), change `www-data` on the `ExecStartPost` line of the unit file, then `sudo systemctl daemon-reload && sudo systemctl restart httpdog`. With the wrong group nginx cannot write to the socket: no alerts arrive, and nginx's error log shows `connect() failed (13: Permission denied)`.
+- **With SELinux enforcing, install `deploy/httpdog-selinux.cil` once**: `sudo semodule -i httpdog-selinux.cil`. This is the default state of Fedora, RHEL, Rocky Linux and AlmaLinux. Without it SELinux refuses to let nginx send to the socket: no alerts arrive and nginx's error log shows `connect() failed (13: Permission denied)`, the same message a wrong group gives; `sudo ausearch -m AVC -ts recent` then lists a `sendto` denial for nginx. The file holds a single rule, which lets the web server's domain (`httpd_t`) send a datagram to the socket of a service without a domain of its own (`unconfined_service_t`, which is what httpdog runs as). Keep the default socket path there: SELinux labels `/run/httpdog` as a directory the web server may write to, and does not do that for a path chosen elsewhere.
 - **A program running as the web server's group can still send logs.** That includes a web application that runs under the same account as nginx's workers, such as PHP-FPM running as `www-data`. The socket keeps out everything else on the machine; it does not make the logs trustworthy against the web server's own account.
 - **After httpdog restarts, reload nginx too** (`sudo systemctl reload nginx`). A restart creates a new socket file, and each nginx worker still holds the old one: it finds out on its next log line, which is lost, and connects to the new socket for the line after that. A reload gives nginx fresh workers, so nothing is lost. Reloading httpdog's rules (`systemctl reload httpdog`) keeps the socket and needs none of this.
 - **While httpdog is stopped the socket does not exist.** nginx keeps serving requests as usual and writes `connect() failed (2: No such file or directory) while logging to syslog` to its error log for the lines it could not send.

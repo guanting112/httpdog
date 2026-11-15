@@ -7,8 +7,10 @@
 #   httpdog --stdin --config examples/00-combined-starter.yaml < /var/log/nginx/access.log
 #
 # The fields combined offers are fixed:
-#   remote_addr, remote_user, time_local, request, request_method, request_uri, uri,
+#   remote_addr, remote_user, time_local, request, request_method, request_uri, request_path, uri,
 #   server_protocol, http_referer, http_user_agent (strings), status, body_bytes_sent (numbers)
+# request_path and uri are the same here: the path without the query string. They differ in the JSON format,
+# and the rules below pick between them the way the JSON templates do, so they can be copied over as they are.
 # There is no host and no request_time, so grouping by site and slow-request rules are not possible;
 # for those, switch to the JSON format in deploy/nginx-snippet.conf.
 # A rule that refers to a field that does not exist is rejected at load time.
@@ -24,11 +26,10 @@ notifiers:
 
 rules:
   # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked. Act at once.
-  # &sensitive_paths is a YAML anchor, so the next rule can reuse the same list with *sensitive_paths
   - id: sensitive-file-exposed
     when:
       all:
-        - any: &sensitive_paths
+        - any:
             - { field: uri, op: suffix, value: /.env }
             - { field: uri, op: prefix, value: /.git/ }
             - { field: uri, op: prefix, value: /.aws/ }
@@ -40,14 +41,20 @@ rules:
     notify: [console]
     message: "Sensitive file read: {uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
 
-  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes
+  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes.
+  # Keep this list the same as the one above
   - id: sensitive-file-probe
     when:
-      any: *sensitive_paths
+      any:
+        - { field: request_path, op: suffix, value: /.env }
+        - { field: request_path, op: prefix, value: /.git/ }
+        - { field: request_path, op: prefix, value: /.aws/ }
+        - { field: request_path, op: prefix, value: /.ssh/ }
+        - { field: request_path, op: regex, value: '(?i)\.(sql|bak|old|swp|tar\.gz|zip)$' }
     group_by: remote_addr
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} tried to access {uri} (status {status})"
+    message: "{remote_addr} tried to access {request_path} (status {status})"
 
   # User-Agent of known scanning tools
   - id: scanner-user-agent
@@ -76,7 +83,7 @@ rules:
     threshold: { count: 30, window: 60s }
     cooldown: 10m
     notify: [console]
-    message: "{remote_addr} many auth failures, latest: {request_method} {uri} -> {status}"
+    message: "{remote_addr} many auth failures, latest: {request_method} {request_path} -> {status}"
 
   # Site-wide 5xx surge
   - id: server-errors
@@ -84,7 +91,7 @@ rules:
     threshold: { count: 50, window: 1m }
     cooldown: 5m
     notify: [console]
-    message: "5xx surge, latest: {request_method} {uri} -> {status}"
+    message: "5xx surge, latest: {request_method} {request_path} -> {status}"
 
   # Backend unreachable or timing out (502 / 503 / 504), usually the application is down or restarting
   - id: gateway-errors
@@ -92,7 +99,7 @@ rules:
     threshold: { count: 10, window: 30s }
     cooldown: 5m
     notify: [console]
-    message: "Backend not responding, latest: {request_method} {uri} -> {status}"
+    message: "Backend not responding, latest: {request_method} {request_path} -> {status}"
 
   # One IP flooding: more than 300 requests in 10 seconds
   - id: single-ip-flood

@@ -20,7 +20,7 @@ Log content comes from the requests a site receives, so the code that reads it i
 | Target | What it checks |
 |---|---|
 | `parse_json` | The `json` parser never panics on arbitrary bytes, and what it returns is a JSON object |
-| `parse_combined` | The `combined` parser never panics, a parsed line has all 12 fields, and unescaping never produces a control character |
+| `parse_combined` | The `combined` parser never panics, a parsed line has all 13 fields, and unescaping never produces a control character |
 | `rule_engine` | The whole path of a log line (parse, match with every operator, thresholds, cooldowns, message template) never panics, and the text of an alert is always a single line |
 | `rule_file` | Loading an arbitrary rule file either succeeds or returns an error, never a panic |
 
@@ -50,7 +50,7 @@ Receiving logs, matching and sending notifications are independent: slow notific
 | `src/format.rs` | Parses a log line into fields: `json` and `combined` |
 | `src/notify.rs` | Notifier thread, webhook body, signature and retries |
 | `src/main.rs` | Arguments, signals, socket / stdin input, main loop, systemd notification |
-| `deploy/` | systemd unit and nginx config snippet |
+| `deploy/` | systemd unit, nginx config snippet, and the SELinux policy for systems where it is enforcing |
 | `examples/` | The `combined` starter rules and 5 scenario templates |
 | `fuzz/` | Fuzz targets and the script that runs them |
 | `sample.log`, `sample.combined.log` | Sample logs for the smoke tests (one JSON, one `combined`) |

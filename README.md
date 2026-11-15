@@ -119,7 +119,7 @@ systemctl status httpdog
 
 Notes:
 
-- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.0` in both URLs of step 1.
+- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.1` in both URLs of step 1.
 - `SHA256SUMS` only catches a corrupted download, because it sits next to the binaries. To prove that a binary was built by this repository's workflow, verify its signed build provenance. Each release carries it as `httpdog.sigstore.json`, so `gh` needs no GitHub login:
 
   ```bash
@@ -127,7 +127,7 @@ Notes:
   gh attestation verify "httpdog-linux-$ARCH" -R guanting112/httpdog --bundle httpdog.sigstore.json
   ```
 
-- The unit file assumes nginx's workers run as the `www-data` group, as they do on Ubuntu and Debian. Elsewhere (Fedora and Rocky Linux use `nginx`), change `www-data` in `httpdog.service` before step 4; see [who can send logs](#who-can-send-logs).
+- The unit file assumes nginx's workers run as the `www-data` group, as they do on Ubuntu and Debian. Elsewhere (Fedora and Rocky Linux use `nginx`), change `www-data` in `httpdog.service` before step 4. Where SELinux is enforcing, which is the default on those two, there is one more step. Both are in [who can send logs](#who-can-send-logs).
 - The service needs no account created in advance (the unit file uses `DynamicUser`). systemd reads `secrets.env` as root before dropping privileges, so the service itself cannot touch that file.
 - The rule templates under `examples/` are in the repository, not in the release: `git clone`, or download the Source code archive on the release page.
 
@@ -150,7 +150,7 @@ httpdog understands two log formats. Pick one:
 | | Option 1: the default format (`combined`) | Option 2: JSON |
 |---|---|---|
 | What changes on the web server | nginx gets one line | nginx gets a `log_format` block |
-| Fields rules can use | A fixed 12, without the site name (`host`) and the processing time (`request_time`) | You decide; add whatever you want to match |
+| Fields rules can use | A fixed 13, without the site name (`host`) and the processing time (`request_time`) | You decide; add whatever you want to match |
 | Good for | Trying it out; Apache | Long-term use; rules such as slow requests or grouping by site |
 
 ### Option 1: the default format (combined)
@@ -196,7 +196,7 @@ log_format httpdog escape=json
 access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname httpdog;
 ```
 
-**The field names in rules are the JSON keys here.** To match something else, add a key to `log_format` and rules can use it.
+**The field names in rules are the JSON keys here.** To match something else, add a key to `log_format` and rules can use it. httpdog adds one field of its own, `request_path`: the path the client asked for, without the query string. Match paths with it rather than with `uri`, which nginx changes when it hands a request to `index.php` or to an error page.
 
 ### Notes for both options
 
@@ -210,6 +210,13 @@ For the content and type of each field and what to watch out for, see [docs/log-
 httpdog believes every log line it receives, so it matters who is able to send one. By default logs arrive on a unix socket, `/run/httpdog/httpdog.sock`, and the unit file opens it to root and nginx's group (`www-data`) only. Other programs on the machine cannot feed httpdog fake logs.
 
 - **If nginx runs as another group**, change `www-data` in `/etc/systemd/system/httpdog.service` to that group (`nginx` on Fedora and Rocky Linux), then run `sudo systemctl daemon-reload && sudo systemctl restart httpdog`.
+- **If SELinux is enforcing** (the default on Fedora, RHEL and Rocky Linux), it does not let nginx write to the socket until you install the small policy file that ships with httpdog. It allows that one action and nothing else:
+
+  ```bash
+  curl -fsSLO "$RAW/deploy/httpdog-selinux.cil"      # RAW as set in step 2 of the install
+  sudo semodule -i httpdog-selinux.cil
+  ```
+
 - **UDP still works**: write `listen: 127.0.0.1:5514` at the top of the rule file and use the same address in nginx. But every program that can reach the address can then send logs, so httpdog prints a warning each time it starts. Use it only when a unix socket is not possible.
 
 Details are in [docs/log-format.md](docs/log-format.md#how-logs-reach-httpdog).
@@ -233,7 +240,7 @@ rules:
   - id: login-bruteforce          # Name of the rule
     when:                         # Condition: all three of these hold
       all:
-        - { field: uri, op: prefix, value: /login }
+        - { field: request_path, op: prefix, value: /login }
         - { field: request_method, op: eq, value: POST }
         - { field: status, op: in, value: [401, 403] }
     group_by: remote_addr         # Each IP is counted separately
@@ -340,7 +347,7 @@ journalctl -u httpdog -n 5          # Confirm that "rules reloaded" appears
 
 ```bash
 sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
-  '{"remote_addr":"192.0.2.1","request_method":"GET","uri":"/.env","status":404}'
+  '{"remote_addr":"192.0.2.1","request_method":"GET","request_uri":"/.env","status":404}'
 ```
 
 `sudo` is needed because only root and nginx's group may write to the socket. Without it the command ends with `Permission denied`, which is the protection doing its job.
@@ -349,11 +356,11 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 
 | Symptom | Likely cause |
 |---|---|
-| No alerts at all | nginx's `server=` does not match `listen` in the rule file; nginx's workers are not in the group the unit file opens the socket to (nginx's error log shows `Permission denied`, see [who can send logs](#who-can-send-logs)); or the log format does not match `format` in the rule file (the summary at exit shows many `unparseable` lines) |
+| No alerts at all | nginx's `server=` does not match `listen` in the rule file; nginx's workers are not in the group the unit file opens the socket to (nginx's error log shows `Permission denied`), or SELinux is enforcing and the policy file is not installed (the same `Permission denied`), see [who can send logs](#who-can-send-logs); or the log format does not match `format` in the rule file (the summary at exit shows many `unparseable` lines) |
 | The log shows `warning: listening on UDP ...` | `listen` in the rule file is a UDP address, and any program that can reach it can send httpdog fake logs. Remove the `listen` line to get the unix socket, change nginx's `server=` to `unix:/run/httpdog/httpdog.sock`, then restart httpdog and reload nginx |
 | Does not start: `cannot listen on unix:/run/httpdog/httpdog.sock: the directory /run/httpdog does not exist` | The unit file is the one from 0.1.0, which does not create that directory; 0.1.0 listened on UDP by default. Install the current `deploy/httpdog.service` and point nginx at the socket. To stay on UDP instead, write `listen: 127.0.0.1:5514` in the rule file |
 | Does not start: `chgrp: invalid group: 'www-data'` | nginx runs as another group on this system. Change `www-data` in the unit file, see [who can send logs](#who-can-send-logs) |
-| A rule should match but does not | The field name differs from the key in `log_format`; or `uri` is used where `request_uri` is needed (see [docs/log-format.md](docs/log-format.md)) |
+| A rule should match but does not | The field name differs from the key in `log_format`; or the rule matches `uri`, which nginx replaces with `/index.php` or an error page, where `request_path` is needed (see [docs/log-format.md](docs/log-format.md#things-to-watch-out-for)) |
 | Notified once and then nothing | Still within the `cooldown`, 1 minute by default |
 | Stops right after starting and is not restarted | The rule file has an error (exit status 78); look at `journalctl -u httpdog -n 20` |
 | One IP trips everyone's threshold | nginx is behind a proxy, so every source IP is the proxy's; set up `real_ip` |
@@ -367,7 +374,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
   -c, --config <file>  rule file, default ./rules.yaml
       --check          validate the rule file and exit
       --stdin          read logs from stdin instead of listening on a socket
-  -V, --version        print the version (e.g. httpdog 0.2.0) and exit
+  -V, --version        print the version (e.g. httpdog 0.2.1) and exit
 ```
 
 `--stdin` has two uses:
