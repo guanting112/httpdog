@@ -4,6 +4,23 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-16
+
+### Changed (incompatible)
+
+- Logs now arrive on a unix socket by default: `listen` defaults to `unix:/run/httpdog/httpdog.sock` instead of the UDP address `127.0.0.1:5514`. httpdog believes every line it receives, and on UDP any program that could reach the address could send lines and raise false alerts. The socket is open to root and the web server's group only. To upgrade from 0.1.0: install the new `deploy/httpdog.service`, change nginx's `syslog:server=` to `unix:/run/httpdog/httpdog.sock`, restart httpdog and reload nginx. A rule file that sets `listen: 127.0.0.1:5514` itself, as the `rules.example.yaml` of 0.1.0 did, keeps receiving over UDP and now prints the warning below.
+- A malformed `listen` is now a rule file error (exit status 78) instead of a failure to listen (exit status 1).
+
+### Added
+
+- `listen: unix:/path` receives logs on a unix datagram socket, created with mode `0660`. `deploy/httpdog.service` hands it to the group nginx's workers run as; httpdog does not join that group.
+- A warning in the log at every start when `listen` is a UDP address, with stronger wording when the address is not a loopback address.
+- A reload that finds a changed `listen` says that it only takes effect after a restart.
+
+### Known limitations
+
+- Restarting httpdog without reloading nginx loses one log line per nginx worker, see `docs/limits.md`.
+
 ## [0.1.0] - 2026-11-15
 
 First release.
@@ -32,5 +49,6 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/guanting112/httpdog/releases/tag/v0.2.0
 [0.1.0]: https://github.com/guanting112/httpdog/releases/tag/v0.1.0

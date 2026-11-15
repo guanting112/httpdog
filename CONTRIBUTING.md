@@ -28,6 +28,7 @@ Pull requests go against `main`. CI runs the format check, clippy, the unit test
 These are deliberate decisions. A change that breaks one will not be merged.
 
 - **Log content is hostile.** It comes from the requests a site receives. A parser returns `None` for a line it cannot read and never panics, unescaping never turns an escape sequence into a control character, and the one-line text of an alert never contains a control character.
+- **Logs arrive on a unix socket by default, and UDP always warns.** httpdog believes every line it receives, so who can send one matters. The socket is writable by its owner and group only, and the unit file hands it to the web server's group without putting httpdog in that group. A UDP `listen` still works but prints a warning at every start; there is no option to silence it.
 - **Webhooks are always signed.** A webhook without a secret does not load, and there is no option to turn signing off. The signature covers the exact bytes sent.
 - **A webhook has one body.** Adding a field is fine. Renaming or removing one, or changing its type, breaks other people's receivers and needs a new `version`.
 - **Configuration errors are found at load time.** Every check sits on the `Engine::from_config` path. Processing a log line cannot fail or panic.

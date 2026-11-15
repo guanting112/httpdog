@@ -13,6 +13,7 @@ Fields with the same name mean the same thing in both formats, so most rules wor
 - [JSON format](#json-format)
 - [combined format](#combined-format)
 - [Apache](#apache)
+- [How logs reach httpdog](#how-logs-reach-httpdog)
 - [syslog header](#syslog-header)
 
 ## JSON format
@@ -114,6 +115,46 @@ CustomLog "|/usr/local/bin/httpdog --stdin --config /etc/httpdog/rules.yaml" com
 - **With way 2, httpdog runs as the user that started Apache, normally root.** Apache starts piped log programs before it drops privileges. Way 1 lets you choose the user.
 - **Use way 1 on a busy site.** Way 2 is a direct pipe and `--stdin` never drops logs: when httpdog cannot keep up, Apache blocks while writing the log, which slows requests down.
 - **Way 1 has no matching systemd unit yet.** httpdog has no built-in file-reading mode, and `deploy/httpdog.service` is for the nginx syslog setup.
+
+## How logs reach httpdog
+
+nginx sends every log line as one syslog message to the address in `listen`, at the top of the rule file. httpdog matches whatever arrives there. It cannot tell a line nginx wrote from a line another program made up, so whoever can send to that address can raise false alerts, or send so much that real lines are dropped. The address should be one that only the web server can reach.
+
+| `listen` | What it is | Who can send logs |
+|---|---|---|
+| `unix:/run/httpdog/httpdog.sock` (default) | A unix socket: a file httpdog creates at startup | root, and the one group the unit file opens it to |
+| `127.0.0.1:5514` | UDP on the loopback address | Every program on the machine |
+| `0.0.0.0:5514`, or any address other machines can reach | UDP on the network | Every host that can reach the port, and every program on the machine |
+
+The same address goes into nginx's `syslog:server=`:
+
+```nginx
+access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname httpdog;
+```
+
+`--stdin` does not use `listen` at all, so none of this applies to the [Apache](#apache) setups above.
+
+### The unix socket
+
+- **Only the owner and the group of the socket file can write to it** (mode `0660`), and root. httpdog creates the file, so at first that means httpdog alone. `deploy/httpdog.service` then gives the file to the group nginx's workers run as (the `ExecStartPost` line, run as root right after httpdog starts). httpdog itself does not join that group, so it gains no access to the web server's files.
+- **The group in the unit file is `www-data`**, which is right for Debian and Ubuntu. Where nginx's workers run as another group (`nginx` on Fedora and Rocky Linux, or whatever `user` in `nginx.conf` says), change `www-data` on the `ExecStartPost` line of the unit file, then `sudo systemctl daemon-reload && sudo systemctl restart httpdog`. With the wrong group nginx cannot write to the socket: no alerts arrive, and nginx's error log shows `connect() failed (13: Permission denied)`.
+- **A program running as the web server's group can still send logs.** That includes a web application that runs under the same account as nginx's workers, such as PHP-FPM running as `www-data`. The socket keeps out everything else on the machine; it does not make the logs trustworthy against the web server's own account.
+- **After httpdog restarts, reload nginx too** (`sudo systemctl reload nginx`). A restart creates a new socket file, and each nginx worker still holds the old one: it finds out on its next log line, which is lost, and connects to the new socket for the line after that. A reload gives nginx fresh workers, so nothing is lost. Reloading httpdog's rules (`systemctl reload httpdog`) keeps the socket and needs none of this.
+- **While httpdog is stopped the socket does not exist.** nginx keeps serving requests as usual and writes `connect() failed (2: No such file or directory) while logging to syslog` to its error log for the lines it could not send.
+- **Without the unit file, `/run/httpdog` does not exist** and httpdog says so and exits. Create a directory for the socket and point `listen` at a path inside it. The socket gets the group httpdog runs as; when the directory has the setgid bit it gets the directory's group instead. Either way, check that the web server's workers are in that group and that nothing else is.
+- **A socket file left by an earlier run is replaced** at startup. If another httpdog is still listening on it, the new one refuses to start instead of taking it over, and a file that is not a socket is never removed.
+
+### UDP
+
+UDP is still there for the cases a unix socket cannot cover, such as a web server on another machine. Write the address as `listen: 127.0.0.1:5514` and use the same address in nginx's `syslog:server=`. The unit file needs no change.
+
+Because UDP cannot limit who sends, httpdog prints a warning at every start:
+
+```
+warning: listening on UDP 127.0.0.1:5514: any program on this machine can send logs here and make httpdog raise false alerts. ...
+```
+
+When the address is reachable from other machines, limit the port to the web server with a firewall and keep it on a private network. The source address of a UDP packet can be forged, so a firewall rule narrows who can send but does not prove who did.
 
 ## syslog header
 

@@ -4,8 +4,13 @@
 #           fires 3 alerts and sends them to HTTPDOG_WEBHOOK_URL, so you can use it to test your own receiver
 # Apply:    systemctl reload httpdog (sends SIGHUP; a broken new file keeps the old rules)
 
-# nginx's access_log syslog:server= must point at this address (changing it needs a restart; reload does not rebind)
-listen: 127.0.0.1:5514
+# Where logs arrive. nginx's access_log syslog:server= must point at the same place
+# (changing it needs a restart; a reload does not apply it).
+# This unix socket is the default, so the line can be left out. Only root and the web server's group can
+# write to it (deploy/httpdog.service sets that up), so other programs on the machine cannot send fake logs.
+# A UDP address such as 127.0.0.1:5514 works too, but anything that can reach it can send, and httpdog
+# prints a warning at every start
+listen: unix:/run/httpdog/httpdog.sock
 
 # Log format. json (the default) goes with the log_format in deploy/nginx-snippet.conf;
 # use combined to leave the nginx / Apache log format alone, see examples/00-combined-starter.yaml.

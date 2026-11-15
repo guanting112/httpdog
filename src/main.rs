@@ -1,15 +1,25 @@
-//! httpdog: reads nginx / Apache access logs (syslog UDP or stdin), matches them against a rule file and sends alerts.
+//! httpdog: reads nginx / Apache access logs (syslog over a unix socket or UDP, or stdin),
+//! matches them against a rule file and sends alerts.
 //!
 //! Architecture:
-//!   input thread (UDP / stdin) --lines--> main loop (rule engine) --alerts--> notifier thread (webhook)
+//!   input thread (socket / stdin) --lines--> main loop (rule engine) --alerts--> notifier thread (webhook)
 //!
 //! The main loop wakes at least once a second to check signals, feed the systemd watchdog and sweep expired state.
 
-use httpdog::{config::Config, engine::Engine, format, notify};
+use httpdog::{
+    config::{Config, Listen},
+    engine::Engine,
+    format, notify,
+};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use std::{
-    io::BufRead,
-    net::UdpSocket,
+    fs,
+    io::{self, BufRead, ErrorKind},
+    net::{SocketAddr, UdpSocket},
+    os::unix::{
+        fs::{FileTypeExt, PermissionsExt},
+        net::UnixDatagram,
+    },
     path::{Path, PathBuf},
     process::exit,
     sync::{
@@ -75,7 +85,7 @@ fn usage(err: &str) -> ! {
     exit(if err.is_empty() { 0 } else { 2 });
 }
 
-fn load(path: &Path) -> Result<(Engine, String), String> {
+fn load(path: &Path) -> Result<(Engine, Listen), String> {
     let cfg = Config::load(path)?;
     let listen = cfg.listen.clone();
     Ok((Engine::from_config(cfg)?, listen))
@@ -114,16 +124,19 @@ fn main() {
             engine.rule_count()
         );
     } else {
-        let sock = UdpSocket::bind(&listen).unwrap_or_else(|e| {
-            eprintln!("cannot listen on UDP {listen}: {e}");
+        let input = Input::open(&listen).unwrap_or_else(|e| {
+            eprintln!("cannot listen on {listen}: {e}");
             exit(1);
         });
-        let dropped = dropped.clone();
-        thread::spawn(move || read_udp(sock, line_tx, &dropped));
         eprintln!(
-            "httpdog started: {} rule(s), listening on UDP {listen}",
+            "httpdog started: {} rule(s), listening on {listen}",
             engine.rule_count()
         );
+        if let Some(warning) = input.warning() {
+            eprintln!("{warning}");
+        }
+        let dropped = dropped.clone();
+        thread::spawn(move || read_socket(input, line_tx, &dropped));
     }
 
     let (alert_tx, notifier) = notify::spawn();
@@ -143,12 +156,19 @@ fn main() {
         if hup.swap(false, Ordering::Relaxed) {
             // A bad new rule file keeps the old rules: monitoring must not stop because of a config mistake
             match load(&args.config) {
-                Ok((new_engine, _)) => {
+                Ok((new_engine, new_listen)) => {
                     engine = new_engine;
                     eprintln!(
                         "rules reloaded: {} rule(s) (counters and cooldowns reset)",
                         engine.rule_count()
                     );
+                    // The socket is opened once at startup. Say so, or a changed listen looks applied when it is not
+                    if !args.stdin && new_listen != listen {
+                        eprintln!(
+                            "listen is now {new_listen} in the rule file, but a reload does not apply it: \
+                             still listening on {listen} until the next restart"
+                        );
+                    }
                 }
                 Err(e) => eprintln!("reload failed, keeping the old rules: {e}"),
             }
@@ -204,16 +224,105 @@ fn enqueue(tx: &SyncSender<notify::Alert>, alert: notify::Alert) {
     }
 }
 
+/// The socket logs arrive on, one syslog message per datagram
+enum Input {
+    Unix(UnixDatagram),
+    Udp(UdpSocket),
+}
+
+impl Input {
+    fn open(listen: &Listen) -> Result<Input, String> {
+        match listen {
+            Listen::Unix(path) => bind_unix(path).map(Input::Unix),
+            Listen::Udp(addr) => UdpSocket::bind(addr)
+                .map(Input::Udp)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// UDP has no way to limit who sends, so using it is worth a line in the log at every start
+    fn warning(&self) -> Option<String> {
+        match self {
+            Input::Unix(_) => None,
+            Input::Udp(sock) => sock.local_addr().ok().map(udp_warning),
+        }
+    }
+
+    fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Input::Unix(sock) => sock.recv(buf),
+            Input::Udp(sock) => sock.recv_from(buf).map(|(n, _)| n),
+        }
+    }
+}
+
+/// Create the unix socket that receives logs. Sending to it needs write permission on the socket file,
+/// which is given to the owner and the group only (0660). The group is the one httpdog runs as, so at this
+/// point nobody else can send. deploy/httpdog.service then hands the file to the web server's group as root,
+/// which lets the web server in without putting httpdog in that group.
+fn bind_unix(path: &Path) -> Result<UnixDatagram, String> {
+    // A socket file left behind by an earlier run (after SIGKILL, say) makes bind fail, so it has to go first.
+    // Remove it only when nothing receives on it any more, and never remove anything that is not a socket
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => {
+            let probe = UnixDatagram::unbound().map_err(|e| e.to_string())?;
+            match probe.connect(path) {
+                Ok(()) => return Err("another process is already listening on it".into()),
+                Err(e) if e.kind() == ErrorKind::ConnectionRefused => {
+                    fs::remove_file(path).map_err(|e| {
+                        format!("cannot remove the socket left by an earlier run: {e}")
+                    })?;
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "a socket is already there and cannot be checked: {e}"
+                    ));
+                }
+            }
+        }
+        Ok(_) => return Err("the path exists and is not a socket".into()),
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+
+    let sock = UnixDatagram::bind(path).map_err(|e| match (e.kind(), path.parent()) {
+        (ErrorKind::NotFound, Some(dir)) => format!(
+            "the directory {} does not exist. deploy/httpdog.service creates /run/httpdog; \
+             when starting httpdog another way, create the directory first or set listen to another path",
+            dir.display()
+        ),
+        _ => e.to_string(),
+    })?;
+    // Until this line the mode comes from the umask, and the usual 022 already leaves group and others
+    // without write permission
+    fs::set_permissions(path, fs::Permissions::from_mode(0o660))
+        .map_err(|e| format!("cannot set the permissions of the socket: {e}"))?;
+    Ok(sock)
+}
+
+fn udp_warning(addr: SocketAddr) -> String {
+    let who = if addr.ip().is_loopback() {
+        "any program on this machine"
+    } else {
+        "any host that can reach this address, and any program on this machine,"
+    };
+    format!(
+        "warning: listening on UDP {addr}: {who} can send logs here and make httpdog raise false alerts. \
+         A unix socket limits who can send: use `listen: unix:/run/httpdog/httpdog.sock` \
+         (the default when listen is left out) and point the web server at the same path"
+    )
+}
+
 /// `unreported` is what the main loop uses to raise overload alerts; it is reset when the main loop collects it.
 /// A separate total since startup is kept here for the log line.
-fn read_udp(sock: UdpSocket, tx: SyncSender<String>, unreported: &AtomicU64) {
+fn read_socket(input: Input, tx: SyncSender<String>, unreported: &AtomicU64) {
     let mut buf = vec![0u8; 65535];
     let mut dropped = 0u64;
     loop {
-        let n = match sock.recv_from(&mut buf) {
-            Ok((n, _)) => n,
+        let n = match input.recv(&mut buf) {
+            Ok(n) => n,
             Err(e) => {
-                eprintln!("UDP receive error: {e}");
+                eprintln!("receive error: {e}");
                 continue;
             }
         };
@@ -255,8 +364,6 @@ fn read_stdin(tx: SyncSender<String>) {
 /// Does nothing when not started by systemd (the variable is unset).
 #[cfg(unix)]
 fn sd_notify(state: &str) {
-    use std::os::unix::net::UnixDatagram;
-
     let Some(path) = std::env::var_os("NOTIFY_SOCKET") else {
         return;
     };
@@ -282,3 +389,104 @@ fn sd_notify(state: &str) {
 
 #[cfg(not(unix))]
 fn sd_notify(_state: &str) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh directory for one test. The name is short because a socket path holds about 100 bytes
+    /// and the temporary directory on macOS is already long
+    fn test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hd-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        dir
+    }
+
+    fn mode(path: &Path) -> u32 {
+        fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn unix_socket_receives_and_is_closed_to_others() {
+        let dir = test_dir("recv");
+        let path = dir.join("s");
+        let input = Input::open(&Listen::Unix(path.clone())).unwrap();
+        assert!(input.warning().is_none());
+        assert_eq!(mode(&path), 0o660);
+
+        let sender = UnixDatagram::unbound().unwrap();
+        sender.send_to(b"<190>nginx: {}", &path).unwrap();
+        let mut buf = [0u8; 64];
+        let n = input.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"<190>nginx: {}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unix_socket_left_by_an_earlier_run_is_replaced() {
+        let dir = test_dir("stale");
+        let path = dir.join("s");
+        drop(bind_unix(&path).unwrap());
+        assert!(path.exists());
+
+        let sock = bind_unix(&path).unwrap();
+        UnixDatagram::unbound()
+            .unwrap()
+            .send_to(b"x", &path)
+            .unwrap();
+        assert_eq!(sock.recv(&mut [0u8; 8]).unwrap(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unix_socket_in_use_is_not_taken_over() {
+        let dir = test_dir("live");
+        let path = dir.join("s");
+        let first = bind_unix(&path).unwrap();
+        assert!(bind_unix(&path).unwrap_err().contains("already listening"));
+
+        // The first one still receives: the refused attempt must not have removed its file
+        UnixDatagram::unbound()
+            .unwrap()
+            .send_to(b"x", &path)
+            .unwrap();
+        assert_eq!(first.recv(&mut [0u8; 8]).unwrap(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unix_socket_never_replaces_an_ordinary_file() {
+        let dir = test_dir("file");
+        let path = dir.join("s");
+        fs::write(&path, "keep me").unwrap();
+        assert!(bind_unix(&path).unwrap_err().contains("not a socket"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "keep me");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unix_socket_needs_its_directory() {
+        let dir = test_dir("nodir");
+        let err = bind_unix(&dir.join("missing/s")).unwrap_err();
+        assert!(err.contains("does not exist"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn udp_always_warns() {
+        let input = Input::open(&Listen::Udp("127.0.0.1:0".into())).unwrap();
+        let local = input.warning().unwrap();
+        assert!(local.starts_with("warning: listening on UDP 127.0.0.1:"));
+        assert!(local.contains("any program on this machine can send"));
+        assert!(!local.contains("any host"));
+
+        let exposed = udp_warning("0.0.0.0:5514".parse().unwrap());
+        assert!(exposed.contains("any host that can reach this address"));
+        let exposed = udp_warning("192.0.2.10:5514".parse().unwrap());
+        assert!(exposed.contains("any host that can reach this address"));
+        assert!(
+            udp_warning("[::1]:5514".parse().unwrap()).contains("any program on this machine can")
+        );
+    }
+}

@@ -119,7 +119,7 @@ systemctl status httpdog
 
 補充:
 
-- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.1.0`。
+- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.2.0`。
 - `SHA256SUMS` 跟執行檔放在一起,只能發現下載過程中損壞的檔案。要確認執行檔真的是這個 repo 的 workflow 編出來的,可以驗證它的建置來源證明(有簽章)。每個 Release 都附有 `httpdog.sigstore.json`,用它驗證時 `gh` 不需要登入 GitHub:
 
   ```bash
@@ -127,6 +127,7 @@ systemctl status httpdog
   gh attestation verify "httpdog-linux-$ARCH" -R guanting112/httpdog --bundle httpdog.sigstore.json
   ```
 
+- unit 檔假設 nginx 的 worker 以 `www-data` 群組執行,Ubuntu 與 Debian 都是這樣。其他系統(Fedora 與 Rocky Linux 是 `nginx`)要在第 4 步之前把 `httpdog.service` 裡的 `www-data` 改掉,見[誰可以送 log](#誰可以送-log)。
 - 服務不需要事先建立帳號(unit 檔用了 `DynamicUser`)。`secrets.env` 由 systemd 以 root 讀取後才降權,服務本身碰不到那個檔案。
 - `examples/` 底下的規則範本在 repo 裡,不在 Release 的附件裡:用 `git clone`,或下載 Release 頁面上的 Source code 壓縮檔。
 
@@ -170,7 +171,7 @@ nginx 與 Apache 預設的 access log 長這樣,httpdog 可以直接讀:
 3. 要即時監看,在 nginx 的 `http { }` 加一行,然後 `sudo nginx -t && sudo systemctl reload nginx`:
 
    ```nginx
-   access_log syslog:server=127.0.0.1:5514,tag=nginx,nohostname;
+   access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname;
    ```
 
 Apache 的接法不一樣,見 [docs/log-format.md](docs/log-format.md#apache)。
@@ -192,7 +193,7 @@ log_format httpdog escape=json
     '"http_referer":"$http_referer",'
     '"http_user_agent":"$http_user_agent"}';
 
-access_log syslog:server=127.0.0.1:5514,tag=nginx,nohostname httpdog;
+access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname httpdog;
 ```
 
 **規則裡的欄位名稱就是這裡的 JSON key**。想比對別的東西,在 `log_format` 加一個 key 就能在規則裡用。
@@ -203,6 +204,15 @@ access_log syslog:server=127.0.0.1:5514,tag=nginx,nohostname httpdog;
 - 站台在 Cloudflare 或其他反向代理後面時,要先設定 nginx 的 `real_ip`。否則每筆 log 的來源 IP 都是代理的 IP,「每個 IP 各算各的」會變成所有人算在一起。
 
 每個欄位的內容、型別與注意事項見 [docs/log-format.md](docs/log-format.md)。
+
+### 誰可以送 log
+
+httpdog 收到的每一行 log 都會照單全收,所以「誰送得進來」很重要。預設 log 經由 unix socket `/run/httpdog/httpdog.sock` 進來,unit 檔只開放給 root 與 nginx 的群組(`www-data`),機器上其他程式沒辦法餵假的 log 給 httpdog。
+
+- **nginx 用的是別的群組時**,把 `/etc/systemd/system/httpdog.service` 裡的 `www-data` 改成那個群組(Fedora 與 Rocky Linux 是 `nginx`),再執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog`。
+- **UDP 還是可以用**:在規則檔最上面寫 `listen: 127.0.0.1:5514`,nginx 那邊用同一個位址。但這樣一來,連得到這個位址的程式都能送 log,所以 httpdog 每次啟動都會印一行警告。沒辦法用 unix socket 時才用它。
+
+細節見 [docs/log-format.md](docs/log-format.md#how-logs-reach-httpdog)。
 
 ## 4. 寫規則
 
@@ -302,8 +312,10 @@ webhook 收到的內容長這樣:
 ```bash
 journalctl -u httpdog -f            # 即時看 log(告警、重試、reload 的結果都在這)
 sudo systemctl reload httpdog       # 套用新規則
-sudo systemctl restart httpdog      # 改了 listen 或 secrets.env 之後
+sudo systemctl restart httpdog && sudo systemctl reload nginx   # 改了 listen 或 secrets.env 之後
 ```
+
+重啟 httpdog 之後記得一併 reload nginx。重啟會讓 httpdog 換一個新的 socket,不 reload 的話,nginx 的每個 worker 要先掉一行 log 才會找到新的。用 `systemctl reload httpdog` 套用新規則則不需要。
 
 **改規則的建議流程**:先檢查,再拿最近的 log 重播看會觸發幾次,最後才 reload。
 
@@ -326,15 +338,20 @@ journalctl -u httpdog -n 5          # 確認出現 rules reloaded
 **手動送一筆測試**,確認整條路是通的(JSON 格式,搭配有比對 `/.env` 的規則):
 
 ```bash
-echo '<190>Nov 11 12:00:00 nginx: {"remote_addr":"192.0.2.1","request_method":"GET","uri":"/.env","status":404}' \
-  | nc -u -w1 127.0.0.1 5514
+sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
+  '{"remote_addr":"192.0.2.1","request_method":"GET","uri":"/.env","status":404}'
 ```
+
+要加 `sudo`,因為只有 root 與 nginx 的群組可以寫入這個 socket。不加的話指令會以 `Permission denied` 結束,這正是保護有在運作。
 
 ## 7. 遇到問題
 
 | 現象 | 可能原因 |
 |---|---|
-| 完全沒有告警 | nginx 的 `server=` 與規則檔的 `listen` 不一致;或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
+| 完全沒有告警 | nginx 的 `server=` 與規則檔的 `listen` 不一致;nginx 的 worker 不在 unit 檔開放 socket 的那個群組裡(nginx 的 error log 會有 `Permission denied`,見[誰可以送 log](#誰可以送-log));或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
+| log 出現 `warning: listening on UDP ...` | 規則檔的 `listen` 是 UDP 位址,連得到它的程式都能送假的 log 給 httpdog。拿掉 `listen` 那一行就會改用 unix socket,再把 nginx 的 `server=` 改成 `unix:/run/httpdog/httpdog.sock`,然後重啟 httpdog、reload nginx |
+| 起不來:`cannot listen on unix:/run/httpdog/httpdog.sock: the directory /run/httpdog does not exist` | unit 檔還是 0.1.0 的,它不會建立這個目錄;0.1.0 預設是聽 UDP。裝上現在的 `deploy/httpdog.service`,並把 nginx 指到 socket。想繼續用 UDP 的話,在規則檔寫 `listen: 127.0.0.1:5514` |
+| 起不來:`chgrp: invalid group: 'www-data'` | 這台機器的 nginx 用的是別的群組。改掉 unit 檔裡的 `www-data`,見[誰可以送 log](#誰可以送-log) |
 | 規則應該要中卻沒中 | 欄位名稱與 `log_format` 的 key 不一致;或該用 `request_uri` 卻用了 `uri`(見 [docs/log-format.md](docs/log-format.md)) |
 | 只通知一次就沒了 | 還在 `cooldown` 內,預設是 1 分鐘 |
 | 啟動後馬上停止、不再重啟 | 規則檔有錯(結束碼 78),看 `journalctl -u httpdog -n 20` |
@@ -348,8 +365,8 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
 
   -c, --config <檔案>  規則檔,預設 ./rules.yaml
       --check          只驗證規則檔,不啟動
-      --stdin          從 stdin 讀 log,不開 UDP
-  -V, --version        印出版本(例如 httpdog 0.1.0)後結束
+      --stdin          從 stdin 讀 log,不開 socket
+  -V, --version        印出版本(例如 httpdog 0.2.0)後結束
 ```
 
 `--stdin` 有兩個用途:
@@ -365,7 +382,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
 | 結束碼 | 意義 |
 |---|---|
 | 0 | 正常結束 |
-| 1 | 無法監聽 UDP 位址 |
+| 1 | 無法監聽 `listen` 指定的位址 |
 | 2 | 命令列參數錯誤 |
 | 78 | 規則檔錯誤。此時 systemd 不會自動重啟(unit 檔設了 `RestartPreventExitStatus=78`) |
 

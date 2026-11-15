@@ -3,14 +3,19 @@
 
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::Path, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// UDP listen address; nginx's syslog:server= must point here
-    #[serde(default = "default_listen")]
-    pub listen: String,
+    /// Where logs arrive; nginx's syslog:server= must point here
+    #[serde(default, deserialize_with = "de_listen")]
+    pub listen: Listen,
     /// Log format, json by default
     #[serde(default)]
     pub format: Format,
@@ -33,8 +38,65 @@ pub struct OverloadDef {
     pub cooldown: Option<Duration>,
 }
 
-fn default_listen() -> String {
-    "127.0.0.1:5514".into()
+/// Where logs arrive. Whoever can send here can make httpdog raise alerts, so the default is a unix socket:
+/// file permissions decide who may write to it, which UDP cannot do
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Listen {
+    /// `unix:/path`: a unix datagram socket, created by httpdog at startup
+    Unix(PathBuf),
+    /// `host:port`: UDP. Anything that can reach the address can send, so main.rs warns at startup
+    Udp(String),
+}
+
+/// The directory comes from RuntimeDirectory= in deploy/httpdog.service
+pub const DEFAULT_SOCKET: &str = "/run/httpdog/httpdog.sock";
+
+/// Longest path a unix socket address holds on Linux: 108 bytes including the terminating NUL
+const MAX_SOCKET_PATH: usize = 107;
+
+impl Default for Listen {
+    fn default() -> Self {
+        Listen::Unix(DEFAULT_SOCKET.into())
+    }
+}
+
+impl fmt::Display for Listen {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Listen::Unix(path) => write!(f, "unix:{}", path.display()),
+            Listen::Udp(addr) => write!(f, "UDP {addr}"),
+        }
+    }
+}
+
+/// `unix:/path` or `host:port`, the same two forms nginx's syslog:server= takes
+fn parse_listen(s: &str) -> Result<Listen, String> {
+    if let Some(path) = s.strip_prefix("unix:") {
+        if !path.starts_with('/') {
+            return Err(format!(
+                "listen: the path of a unix socket must be absolute, got {path:?}"
+            ));
+        }
+        if path.len() > MAX_SOCKET_PATH {
+            return Err(format!(
+                "listen: the path of a unix socket can be at most {MAX_SOCKET_PATH} bytes long"
+            ));
+        }
+        return Ok(Listen::Unix(path.into()));
+    }
+    // Only the shape is checked here; whether the host resolves is found out when binding
+    match s.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() && port.parse::<u16>().is_ok() => {
+            Ok(Listen::Udp(s.into()))
+        }
+        _ => Err(format!(
+            "listen: expected unix:/path or host:port, got {s:?}"
+        )),
+    }
+}
+
+fn de_listen<'de, D: Deserializer<'de>>(d: D) -> Result<Listen, D::Error> {
+    parse_listen(&String::deserialize(d)?).map_err(serde::de::Error::custom)
 }
 
 /// Format of each log line. Parsing lives in format.rs
@@ -248,5 +310,58 @@ mod tests {
         assert_eq!(parse_duration("45").unwrap(), Duration::from_secs(45));
         assert!(parse_duration("5 days").is_err());
         assert!(parse_duration("abc").is_err());
+    }
+
+    #[test]
+    fn listen_addresses() {
+        assert_eq!(
+            parse_listen("unix:/run/httpdog/httpdog.sock").unwrap(),
+            Listen::Unix("/run/httpdog/httpdog.sock".into())
+        );
+        assert_eq!(
+            parse_listen("127.0.0.1:5514").unwrap(),
+            Listen::Udp("127.0.0.1:5514".into())
+        );
+        assert_eq!(
+            parse_listen("[::1]:5514").unwrap(),
+            Listen::Udp("[::1]:5514".into())
+        );
+        assert_eq!(
+            parse_listen("localhost:5514").unwrap(),
+            Listen::Udp("localhost:5514".into())
+        );
+
+        // A relative path would depend on the directory httpdog happens to start in
+        assert!(parse_listen("unix:httpdog.sock").is_err());
+        assert!(parse_listen("unix:").is_err());
+        assert!(parse_listen(&format!("unix:/{}", "a".repeat(MAX_SOCKET_PATH))).is_err());
+        // The likely mistake: a socket path without the unix: prefix
+        assert!(parse_listen("/run/httpdog/httpdog.sock").is_err());
+        assert!(parse_listen("5514").is_err());
+        assert!(parse_listen(":5514").is_err());
+        assert!(parse_listen("127.0.0.1").is_err());
+        assert!(parse_listen("127.0.0.1:99999").is_err());
+    }
+
+    #[test]
+    fn listen_in_a_rule_file() {
+        let listen =
+            |head: &str| Config::parse(&format!("{head}\nrules: []\n"), false).map(|c| c.listen);
+
+        // Left out: the unix socket, so that an install which says nothing gets the safer input
+        assert_eq!(listen("").unwrap(), Listen::Unix(DEFAULT_SOCKET.into()));
+        assert_eq!(
+            listen("listen: unix:/tmp/h.sock").unwrap(),
+            Listen::Unix("/tmp/h.sock".into())
+        );
+        assert_eq!(
+            listen("listen: 127.0.0.1:5514").unwrap(),
+            Listen::Udp("127.0.0.1:5514".into())
+        );
+        assert!(
+            listen("listen: /tmp/h.sock")
+                .unwrap_err()
+                .contains("unix:/path")
+        );
     }
 }

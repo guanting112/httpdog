@@ -35,7 +35,7 @@ An input that fails is saved under `fuzz/artifacts/<target>/`. Replay it with `c
 ## How the program works
 
 ```
-nginx ──syslog/UDP──▶ input thread ──▶ main loop (rule engine) ──▶ notifier thread ──▶ webhook / stderr
+nginx ──syslog (unix socket or UDP)──▶ input thread ──▶ main loop (rule engine) ──▶ notifier thread ──▶ webhook / stderr
 ```
 
 Receiving logs, matching and sending notifications are independent: slow notifications never block matching, and when matching cannot keep up it is the incoming logs that are dropped, so memory cannot grow without bound.
@@ -49,7 +49,7 @@ Receiving logs, matching and sending notifications are independent: slow notific
 | `src/engine.rs` | Rule engine: rule file validation, matching, threshold counting, cooldowns |
 | `src/format.rs` | Parses a log line into fields: `json` and `combined` |
 | `src/notify.rs` | Notifier thread, webhook body, signature and retries |
-| `src/main.rs` | Arguments, signals, UDP / stdin input, main loop, systemd notification |
+| `src/main.rs` | Arguments, signals, socket / stdin input, main loop, systemd notification |
 | `deploy/` | systemd unit and nginx config snippet |
 | `examples/` | The `combined` starter rules and 5 scenario templates |
 | `fuzz/` | Fuzz targets and the script that runs them |

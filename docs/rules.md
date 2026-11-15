@@ -16,7 +16,7 @@ The full reference for the rule file. If this is your first time, start with ["W
 A complete example is in `rules.example.yaml`. A file ending in `.json` is parsed as JSON, anything else as YAML; the structure is identical.
 
 ```yaml
-listen: 127.0.0.1:5514
+listen: unix:/run/httpdog/httpdog.sock
 instance: web-01
 
 notifiers:
@@ -49,7 +49,7 @@ rules:
 | `notifiers` | No | Notification channels. You choose the names; rules refer to them in `notify` |
 | `format` | No | Log format: `json` (default) or `combined`, see [log-format.md](log-format.md). Takes effect on reload |
 | `instance` | No | Name of this httpdog instance, e.g. `web-01`. The webhook body carries it so the receiver can tell which one fired. **Default `unknown`**. At most 64 characters; must not be empty or contain newlines or other control characters. Takes effect on reload |
-| `listen` | No | UDP address that receives logs, default `127.0.0.1:5514`. It must match nginx's `syslog:server=`. Changing it needs a restart; a reload does not apply it |
+| `listen` | No | Where logs arrive: `unix:/path` for a unix socket, or `host:port` for UDP. **Default `unix:/run/httpdog/httpdog.sock`**. It must match nginx's `syslog:server=`. A unix socket limits who can send logs; with UDP anything that can reach the address can, so httpdog prints a warning at every start. See [How logs reach httpdog](log-format.md#how-logs-reach-httpdog). Changing it needs a restart; a reload does not apply it |
 | `overload` | No | Who to notify when logs are dropped because httpdog cannot keep up, see [overload](#overload-alerts-when-falling-behind). When omitted, drops are only logged |
 
 ## notifiers: where notifications go

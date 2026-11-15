@@ -41,5 +41,5 @@ These are ordinary bugs; please open a public issue for them:
 
 - a rule that does not match what it should, or an alert that should not have fired
 - anything that requires changing the rule file or the environment httpdog runs in. Whoever controls those controls httpdog
-- log lines sent by a local process to the UDP address httpdog listens on. It listens on `127.0.0.1` by default and trusts what arrives there, so do not expose that address to untrusted hosts
+- log lines sent by a program that is allowed to send to the address httpdog listens on. httpdog trusts what arrives there. By default that is a unix socket open to root and the web server's group only; with a UDP `listen` it is anything that can reach the address, which httpdog warns about at every start (see [docs/log-format.md](docs/log-format.md#how-logs-reach-httpdog)). A program that gets a line in without that access is a vulnerability
 - logs dropped when traffic exceeds what httpdog can process. That is a documented limit, and the `overload` alert reports it (see [docs/limits.md](docs/limits.md))

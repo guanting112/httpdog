@@ -14,6 +14,16 @@ RestartPreventExitStatus=78
 # If the main loop does not report for 30 seconds it is treated as hung; systemd kills and restarts it
 WatchdogSec=30
 
+# Logs arrive on a unix socket that httpdog creates in this directory: /run/httpdog/httpdog.sock,
+# the default `listen` of the rule file
+RuntimeDirectory=httpdog
+# Whoever can write to that socket can make httpdog raise alerts. httpdog creates it writable by itself only;
+# this line then lets in one group, the one nginx's workers run as, and nobody else.
+# www-data is right for Debian / Ubuntu. On Fedora / Rocky Linux change it to nginx.
+# The + runs it as root: httpdog is deliberately not a member of the web server's group, so it cannot
+# hand the socket over itself. When `listen` in the rule file is a UDP address there is no socket and this does nothing
+ExecStartPost=+/bin/sh -c 'if [ -S /run/httpdog/httpdog.sock ]; then chgrp www-data /run/httpdog/httpdog.sock; fi'
+
 # Secrets such as the webhook URL go here (mode 600, root). The leading - means a missing file is not an error
 EnvironmentFile=-/etc/httpdog/secrets.env
 
