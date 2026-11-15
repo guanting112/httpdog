@@ -6,6 +6,9 @@
 //!
 //! The main loop wakes at least once a second to check signals, feed the systemd watchdog and sweep expired state.
 
+// The same rule as in src/lib.rs: no unsafe code in the binary either
+#![forbid(unsafe_code)]
+
 use httpdog::{
     config::{Config, Listen},
     engine::Engine,

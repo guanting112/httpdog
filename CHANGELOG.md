@@ -4,6 +4,22 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-16
+
+The program behaves the same as 0.2.2. The changes are in the systemd unit file, the documentation, and a guarantee about the code.
+
+### Added
+
+- `#![forbid(unsafe_code)]` in the library and the binary: the compiler now refuses `unsafe` code in httpdog itself. There was none; this keeps it that way.
+
+### Documentation
+
+- The README says what httpdog being written in Rust buys: speed, with the measured rate (250,000 to 500,000 lines a second on a laptop, depending on the rules), and memory safety for a program that reads text chosen by attackers. `docs/limits.md` has the measurement.
+
+### Changed
+
+- `deploy/httpdog.service` puts a ceiling of 256 MB on httpdog's memory (`MemoryMax=256M`, `MemorySwapMax=0`). httpdog normally uses a few megabytes, but the counters of a rule with `group_by` grow with the number of distinct groups, and nothing limited that. At the ceiling the kernel kills httpdog and systemd restarts it with empty counters. To get it, install the new unit file and run `sudo systemctl daemon-reload && sudo systemctl restart httpdog`.
+
 ## [0.2.2] - 2026-11-16
 
 ### Fixed
@@ -73,7 +89,8 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/guanting112/httpdog/releases/tag/v0.2.3
 [0.2.2]: https://github.com/guanting112/httpdog/releases/tag/v0.2.2
 [0.2.1]: https://github.com/guanting112/httpdog/releases/tag/v0.2.1
 [0.2.0]: https://github.com/guanting112/httpdog/releases/tag/v0.2.0

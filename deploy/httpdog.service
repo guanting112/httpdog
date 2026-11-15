@@ -24,6 +24,13 @@ RuntimeDirectory=httpdog
 # hand the socket over itself. When `listen` in the rule file is a UDP address there is no socket and this does nothing
 ExecStartPost=+/bin/sh -c 'if [ -S /run/httpdog/httpdog.sock ]; then chgrp www-data /run/httpdog/httpdog.sock; fi'
 
+# A ceiling on memory. httpdog normally uses a few megabytes. What can grow is the state of rules with
+# group_by: one counter for every group being counted (docs/limits.md has the numbers). At the ceiling the
+# kernel kills httpdog and systemd starts it again with empty counters: a last resort that keeps the rest of
+# the machine running. MemorySwapMax=0 makes that happen at once, instead of httpdog first slowing down in swap
+MemoryMax=256M
+MemorySwapMax=0
+
 # Secrets such as the webhook URL go here (mode 600, root). The leading - means a missing file is not an error
 EnvironmentFile=-/etc/httpdog/secrets.env
 

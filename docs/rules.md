@@ -78,7 +78,7 @@ For what is sent, how to verify the signature and how retries work, see [webhook
 | `when` | Yes | The condition, see [when](#when-conditions) |
 | `notify` | Yes | List of notifier names to notify, at least one |
 | `threshold` | No | `{ count, window }`: notify only once `count` hits accumulate within `window`, then start counting again. When omitted, a single hit notifies |
-| `group_by` | No | Grouping field. Thresholds and cooldowns are tracked separately per value of this field, e.g. `remote_addr` counts each IP on its own. When omitted, the whole rule shares one group |
+| `group_by` | No | Grouping field. Thresholds and cooldowns are tracked separately per value of this field, e.g. `remote_addr` counts each IP on its own. When omitted, the whole rule shares one group. Each value that is being counted takes a little memory until its window and cooldown have passed, so prefer a field with a limited number of values; see [limits.md](limits.md#known-limitations) |
 | `cooldown` | No | Notify at most once per group within this period. **Default `1m`**; `0s` means no cooldown |
 | `message` | No | The notification text. `{field}` is replaced with that log line's value, or `-` when the field is missing. When omitted, the first 300 characters of the raw log line are attached |
 

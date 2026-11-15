@@ -26,6 +26,8 @@ nginx / Apache ──a log line per request──▶ httpdog (matches the rules)
 ```
 
 - **Light**: a single binary (about 4 MB) using about 5 MB of memory when idle, with no database or other service to run
+- **Fast**: written in Rust and compiled to machine code, with no garbage collector to pause it. Replaying a log on a laptop, it matches 250,000 to 500,000 lines a second depending on the rules, in about 6 MB of memory. A site would have to serve that many requests a second before httpdog fell behind
+- **Memory-safe**: the text in an access log is chosen by whoever sends requests to your site, so the program that reads it must not be the weak point. Rust rules out the memory errors behind most such holes, httpdog has no `unsafe` code of its own (the compiler is set to refuse any), and its log parsers and rule engine are fuzzed on every push
 - **Easy to install**: releases ship amd64 and arm64 binaries that run as downloaded, no Rust needed
 - **Works without touching the web server config**: reads the default log format of nginx / Apache
 - **No restart to change rules**: `systemctl reload` applies them; a broken new rule file keeps the old rules, so monitoring never stops
@@ -119,7 +121,7 @@ systemctl status httpdog
 
 Notes:
 
-- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.2` in both URLs of step 1.
+- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.3` in both URLs of step 1.
 - `SHA256SUMS` only catches a corrupted download, because it sits next to the binaries. To prove that a binary was built by this repository's workflow, verify its signed build provenance. Each release carries it as `httpdog.sigstore.json`, so `gh` needs no GitHub login:
 
   ```bash
@@ -362,6 +364,7 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 | Does not start: `chgrp: invalid group: 'www-data'` | nginx runs as another group on this system. Change `www-data` in the unit file, see [who can send logs](#who-can-send-logs) |
 | A rule should match but does not | The field name differs from the key in `log_format`; or the rule matches `uri`, which nginx replaces with `/index.php` or an error page, where `request_path` is needed (see [docs/log-format.md](docs/log-format.md#things-to-watch-out-for)) |
 | Notified once and then nothing | Still within the `cooldown`, 1 minute by default |
+| The log shows `killed by the OOM killer` and httpdog keeps restarting | httpdog reached the memory ceiling in the unit file (`MemoryMax=256M`). The cause is almost always a rule whose `group_by` is something a client chooses freely, such as the path, while a flood of distinct values arrives. Group by something with fewer values (`remote_addr`), shorten that rule's `window` and `cooldown`, or raise `MemoryMax`; see [docs/limits.md](docs/limits.md#known-limitations) |
 | Stops right after starting and is not restarted | The rule file has an error (exit status 78); look at `journalctl -u httpdog -n 20` |
 | One IP trips everyone's threshold | nginx is behind a proxy, so every source IP is the proxy's; set up `real_ip` |
 | The log shows `falling behind, ... dropped so far`, or you get an `overload` alert | Traffic exceeds the processing rate; check for a badly performing regex. The number in the log is the total since startup; the number in the alert is the count since the previous alert |
@@ -374,7 +377,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
   -c, --config <file>  rule file, default ./rules.yaml
       --check          validate the rule file and exit
       --stdin          read logs from stdin instead of listening on a socket
-  -V, --version        print the version (e.g. httpdog 0.2.2) and exit
+  -V, --version        print the version (e.g. httpdog 0.2.3) and exit
 ```
 
 `--stdin` has two uses:

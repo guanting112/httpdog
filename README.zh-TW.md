@@ -26,6 +26,8 @@ nginx / Apache ──每筆請求的 log──▶ httpdog(照規則比對)──
 ```
 
 - **輕**:單一執行檔(約 4 MB),閒置記憶體約 5 MB,不需要資料庫或其他服務
+- **快**:用 Rust 寫成、編譯成機器碼,沒有會讓程式停頓的垃圾回收。在筆電上重播 log,每秒可比對 25 萬到 50 萬行(視規則而定),過程中記憶體約 6 MB。網站要到每秒這麼多請求,httpdog 才會跟不上
+- **記憶體安全**:access log 裡的文字,是對你網站發請求的任何人決定的,所以讀它的程式不能成為弱點。這類漏洞大多出在記憶體錯誤,而 Rust 從語言層面排除了它們;httpdog 自己的程式碼沒有任何 `unsafe`(已設定成有的話編譯器直接拒絕),log 解析器與規則引擎在每次 push 都會做模糊測試
 - **好裝**:Release 附有 amd64 與 arm64 的執行檔,下載就能用,不用裝 Rust
 - **不改網站設定也能用**:直接吃 nginx / Apache 預設的 log 格式
 - **改規則不用重啟**:改完 `systemctl reload` 就生效;新規則寫錯會沿用舊的,監控不中斷
@@ -119,7 +121,7 @@ systemctl status httpdog
 
 補充:
 
-- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.2.2`。
+- 要安裝指定的版本而不是最新版,把第 1 步兩個網址裡的 `latest/download` 換成 `download/v0.2.3`。
 - `SHA256SUMS` 跟執行檔放在一起,只能發現下載過程中損壞的檔案。要確認執行檔真的是這個 repo 的 workflow 編出來的,可以驗證它的建置來源證明(有簽章)。每個 Release 都附有 `httpdog.sigstore.json`,用它驗證時 `gh` 不需要登入 GitHub:
 
   ```bash
@@ -361,6 +363,7 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 | 起不來:`chgrp: invalid group: 'www-data'` | 這台機器的 nginx 用的是別的群組。改掉 unit 檔裡的 `www-data`,見[誰可以送 log](#誰可以送-log) |
 | 規則應該要中卻沒中 | 欄位名稱與 `log_format` 的 key 不一致;或規則比對的是 `uri`,而 nginx 會把它換成 `/index.php` 或錯誤頁,這時該用 `request_path`(見 [docs/log-format.md](docs/log-format.md#things-to-watch-out-for)) |
 | 只通知一次就沒了 | 還在 `cooldown` 內,預設是 1 分鐘 |
+| log 出現 `killed by the OOM killer`,而且 httpdog 一直重啟 | httpdog 用到了 unit 檔設定的記憶體上限(`MemoryMax=256M`)。原因幾乎都是某條規則的 `group_by` 用了訪客可以任意決定的欄位(例如路徑),又剛好湧入大量不重複的值。改用值比較少的欄位分組(`remote_addr`)、縮短那條規則的 `window` 與 `cooldown`,或調高 `MemoryMax`;見 [docs/limits.md](docs/limits.md#known-limitations) |
 | 啟動後馬上停止、不再重啟 | 規則檔有錯(結束碼 78),看 `journalctl -u httpdog -n 20` |
 | 同一個 IP 觸發所有人的門檻 | nginx 在代理後面,來源 IP 都是代理的 IP,要設定 `real_ip` |
 | log 出現 `falling behind, ... dropped so far`,或收到 `overload` 告警 | 流量超過處理速度,檢查是否有效能很差的 regex。log 裡的數字是啟動以來的累計,告警裡的是上一則告警之後的數量 |
@@ -373,7 +376,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
   -c, --config <檔案>  規則檔,預設 ./rules.yaml
       --check          只驗證規則檔,不啟動
       --stdin          從 stdin 讀 log,不開 socket
-  -V, --version        印出版本(例如 httpdog 0.2.2)後結束
+  -V, --version        印出版本(例如 httpdog 0.2.3)後結束
 ```
 
 `--stdin` 有兩個用途:

@@ -38,6 +38,7 @@ These are deliberate decisions. A change that breaks one will not be merged.
 - **Secrets stay out of the logs.** The webhook URL and the signing secret never appear in a log line or an error message; an error names the environment variable, not its value.
 - **Exit status 78 means a rule file error** and nothing else. The systemd unit relies on it to stop restarting.
 - **systemd does the rest.** No daemonizing, no PID file, no timestamps of its own; logs go to stderr.
+- **No `unsafe` code.** Both crate roots carry `#![forbid(unsafe_code)]`, so it does not compile. httpdog reads text chosen by attackers, and this is what the README's claim of memory safety rests on. Something that seems to need `unsafe` needs another design, or a dependency that already provides it safely.
 - **Small and synchronous.** One static binary, no async runtime, few dependencies. A new dependency needs a reason.
 
 ## Tests

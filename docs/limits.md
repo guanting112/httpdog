@@ -8,7 +8,7 @@ httpdog is kept simple on purpose. These are the current trade-offs.
 
 - **Thresholds use the time a log is received**, not the time inside the log. It makes no difference for live monitoring, but when old logs are replayed with `--stdin` every line arrives at once, so threshold rules fire more easily than they really would have.
 - **State is in memory only** and is lost on restart, so the same thing may be notified again after a restart.
-- **Every group a rule is counting takes memory, and their number has no cap.** A rule with `group_by` keeps a counter for each distinct value until its window and cooldown have passed: about 370 bytes plus the length of the value. Grouping by IP stays small. Grouping by something a client chooses freely, such as `request_path`, grows with the number of distinct values that arrive in that time; in the measurement below 500,000 distinct paths took about 185 MB until they expired.
+- **Every group a rule is counting takes memory, and their number has no cap.** A rule with `group_by` keeps a counter for each distinct value until its window and cooldown have passed: about 370 bytes plus the length of the value. Grouping by IP stays small. Grouping by something a client chooses freely, such as `request_path`, grows with the number of distinct values that arrive in that time; in the measurement below 500,000 distinct paths took about 185 MB until they expired. The unit file puts a ceiling of 256 MB on httpdog (`MemoryMax`). At the ceiling the kernel kills httpdog and systemd starts it again with empty counters, which keeps the machine running but is no way to run a monitor: while such a flood lasts, httpdog spends most of its time restarting.
 - **A reload resets counters and cooldowns**, including the dropped count that `overload` accumulated during a cooldown and has not reported yet.
 
 **Receiving logs**
@@ -129,6 +129,18 @@ GitHub Actions also runs on Ubuntu 24.04 on every push (`.github/workflows/build
 - Tested: build, clippy, unit tests, smoke tests on both sample logs.
 - `overload` alerts, reload with a broken rule file, the webhook body and signature, and `combined` logs from the Apache 2.4 bundled with macOS were also tested here before the Linux run above.
 
+**Speed**
+
+Measured on 2026-11-16 with the 0.2.2 release binary (arm64) in an OrbStack machine on an Apple M2 Pro. A log of 2,000,000 lines of ordinary traffic, none of which raises an alert, was replayed through `--stdin`; the figures are the best of three runs.
+
+| Format and rule file | Lines a second |
+|---|---|
+| `json`, `rules.example.yaml` (4 rules) | about 510,000 |
+| `json`, `examples/01-security-probe.yaml` (6 rules, several regexes) | about 360,000 |
+| `combined`, `examples/00-combined-starter.yaml` (8 rules) | about 245,000 |
+
+Memory peaked at 6 MB during the replay. This is the rate of parsing and matching; how fast lines can arrive over the socket was not measured.
+
 **Memory**
 
 Measured on 2026-11-16 in an OrbStack machine with static arm64 binaries: the 0.2.1 release, and a build of the source that became 0.2.2. Lines were fed through `--stdin` and the resident memory of the process was read after each step.
@@ -147,6 +159,12 @@ Measured on 2026-11-16 in an OrbStack machine with static arm64 binaries: the 0.
 - A line that matches nothing, and a line that raises an alert, leave nothing behind.
 - The second 500,000 groups peak where the first did, so expired counters are released and their memory is used again.
 - With 0.2.1 the emptied table kept about 80 MB until restart; 0.2.2 shrinks it.
+
+The memory ceiling of the unit file was tested the same day in an OrbStack machine (Ubuntu 24.04, systemd 255) with the 0.2.2 release binary and the unit file as shipped. A rule that keeps a counter per path was flooded through the socket with distinct 400-byte paths, about 190,000 lines a second for 38 seconds:
+
+- systemd applied the limits (`memory.max` 268435456, `memory.swap.max` 0), and httpdog at rest used about 2 MB.
+- Each time httpdog reached 256 MB it was killed (`Failed with result 'oom-kill'`) and started again two seconds later: 14 times during the flood.
+- Afterwards the unit was active, the socket had been handed to nginx's group again, and a line sent to it was accepted.
 
 **Fuzzing**
 
