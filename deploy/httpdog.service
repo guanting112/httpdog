@@ -1,0 +1,29 @@
+[Unit]
+Description=httpdog - nginx access log alerting
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/httpdog --config /etc/httpdog/rules.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=2
+# 78 = config error. Restarting will not help, so stay down until someone fixes it
+RestartPreventExitStatus=78
+# If the main loop does not report for 30 seconds it is treated as hung; systemd kills and restarts it
+WatchdogSec=30
+
+# Secrets such as the webhook URL go here (mode 600, root). The leading - means a missing file is not an error
+EnvironmentFile=-/etc/httpdog/secrets.env
+
+# No account to create in advance: systemd allocates an unprivileged identity at start
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+[Install]
+WantedBy=multi-user.target

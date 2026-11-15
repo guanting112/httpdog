@@ -1,0 +1,95 @@
+# Scenario 4: traffic anomalies
+#
+# For: finding out who is behind a sudden traffic surge and where it lands. It catches site-wide peaks, one IP flooding,
+# one endpoint being hammered, crawlers and scripts, and abnormally large responses.
+#
+# Fields needed: remote_addr, uri, body_bytes_sent, http_user_agent
+#
+# Tuning notes:
+#   - These thresholds need the most tuning per site. Estimate your normal requests per 10 seconds from journalctl
+#     or an existing access log, and set traffic-surge to 3 to 5 times the peak.
+#   - Under really heavy traffic httpdog itself may fall behind, so this file also turns on overload:
+#     dropped logs raise a separate alert, telling you the counts for that period are too low.
+#   - These rules only notify; they do not block traffic. To block, use nginx's limit_req / limit_conn or a CDN.
+
+notifiers:
+  console:
+    type: stderr
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+overload:
+  notify: [console, ops]
+  cooldown: 5m
+
+rules:
+  # Site-wide traffic peak: more than 5000 requests in 10 seconds.
+  # exists as the condition means every line counts, because every log line has remote_addr
+  - id: traffic-surge
+    when: { field: remote_addr, op: exists }
+    threshold: { count: 5000, window: 10s }
+    cooldown: 5m
+    notify: [ops]
+    message: "Site-wide traffic surge, latest: {host}{uri}"
+
+  # One IP flooding: more than 300 requests in 10 seconds
+  - id: single-ip-flood
+    when: { field: remote_addr, op: exists }
+    group_by: remote_addr
+    threshold: { count: 300, window: 10s }
+    cooldown: 10m
+    notify: [ops]
+    message: "{remote_addr} abnormal request volume, latest: {uri}"
+
+  # One endpoint being hammered: when many IPs hit the same path the rule above misses it, so this groups by uri
+  - id: hot-endpoint
+    when: { field: uri, op: exists }
+    group_by: uri
+    threshold: { count: 2000, window: 10s }
+    cooldown: 10m
+    notify: [console]
+    message: "{host}{uri} is being hammered"
+
+  # Expensive endpoints (search, export) called over and over by one IP. A few requests to these can bring the backend down,
+  # so the threshold is far below normal traffic. Use the resource-hungry paths of your own site
+  - id: expensive-endpoint-abuse
+    when:
+      any:
+        - { field: uri, op: prefix, value: /search }
+        - { field: uri, op: prefix, value: /api/export }
+    group_by: remote_addr
+    threshold: { count: 30, window: 60s }
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} is calling {uri} heavily"
+
+  # The default User-Agent of scripts and libraries, in volume. A little is normal (monitoring, partner integrations)
+  - id: scripted-client-flood
+    when:
+      field: http_user_agent
+      op: regex
+      value: '(?i)(python-requests|curl/|wget/|go-http-client|scrapy|okhttp|java/)'
+    group_by: remote_addr
+    threshold: { count: 100, window: 60s }
+    cooldown: 30m
+    notify: [console]
+    message: "{remote_addr} many scripted requests: {http_user_agent}"
+
+  # Many requests with no User-Agent. Both the empty string and "-" are listed, to cover both log_format styles
+  - id: empty-user-agent
+    when: { field: http_user_agent, op: in, value: ["", "-"] }
+    group_by: remote_addr
+    threshold: { count: 50, window: 60s }
+    cooldown: 30m
+    notify: [console]
+    message: "{remote_addr} many requests with no User-Agent, latest: {uri}"
+
+  # A single response over 100 MB: someone may be bulk downloading, or an API forgot to paginate
+  - id: large-response
+    when: { field: body_bytes_sent, op: gt, value: 104857600 }
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console]
+    message: "{remote_addr} downloaded {body_bytes_sent} bytes: {uri}"

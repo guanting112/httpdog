@@ -1,0 +1,26 @@
+# Dependabot opens pull requests for new versions of the crates httpdog depends on and of the
+# actions in .github/workflows, updating their SHA pins and comments.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    # The binary's dependencies, and those of the fuzz targets (a separate crate with its own lock file).
+    directories: ["/", "/fuzz"]
+    schedule:
+      interval: weekly
+    # A new version is proposed only after it has been out for a week, so one
+    # that is pulled for being malicious or broken does not reach the binary.
+    cooldown:
+      default-days: 7
+    groups:
+      crates:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

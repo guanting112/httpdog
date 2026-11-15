@@ -1,0 +1,94 @@
+# Example httpdog rule file
+# Validate: httpdog --check --config rules.yaml
+# Try it:   httpdog --stdin --config rules.example.yaml < sample.log
+#           fires 3 alerts and sends them to HTTPDOG_WEBHOOK_URL, so you can use it to test your own receiver
+# Apply:    systemctl reload httpdog (sends SIGHUP; a broken new file keeps the old rules)
+
+# nginx's access_log syslog:server= must point at this address (changing it needs a restart; reload does not rebind)
+listen: 127.0.0.1:5514
+
+# Log format. json (the default) goes with the log_format in deploy/nginx-snippet.conf;
+# use combined to leave the nginx / Apache log format alone, see examples/00-combined-starter.yaml.
+# This example uses request_time, so it only works with json
+format: json
+
+# Name of this httpdog instance. Every webhook body carries it in the instance field,
+# which tells the sources apart when several send to the same receiver. "unknown" when omitted
+instance: web-01
+
+notifiers:
+  console:
+    type: stderr                 # Prints to stderr, collected by journald; start with this while testing rules
+  # webhook: POST the alert as JSON to your own receiver. The body has separate fields for the rule id,
+  # message, group, count and raw log line (see docs/webhook.md)
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL   # Keep the URL in an environment variable (systemd's EnvironmentFile), not in this file
+    # Signing secret. Every webhook must have one or httpdog will not start (generate one with openssl rand -hex 32).
+    # httpdog signs every request with it and the receiver verifies with the same secret that the request really came from httpdog
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+# When traffic exceeds what httpdog can process, it drops the logs it cannot keep up with. With this section a drop
+# raises an alert in addition to the log line; drops within the cooldown accumulate into the next alert
+# (cooldown defaults to 1m)
+overload:
+  notify: [ops]
+  cooldown: 5m
+
+# Available ops:
+#   eq / ne / in            equal, not equal, in a list (with a number in the rule, both "404" and 404 in the log match)
+#   prefix / suffix / contains / regex
+#   gt / gte / lt / lte     numeric comparison
+#   exists                  the field is present
+# Matching is always case-sensitive. Only regex can turn that off: put (?i) at the start of the pattern, e.g. '(?i)^/admin'
+# Conditions nest freely with all / any / not.
+#
+# field takes a JSON key from nginx's log_format. With deploy/nginx-snippet.conf these are:
+#   strings: remote_addr, host, request_method, uri, request_uri, http_referer, http_user_agent
+#   numbers: status, request_time (seconds), body_bytes_sent
+# uri has no query string; request_uri does. A mistyped name is not an error, it just never matches,
+# so replay a log with --stdin after writing a rule to confirm it fires. group_by and the {..} in message use the same names.
+
+rules:
+  # Fires on a single match: someone is looking for leaked config files. One notification per IP every 10 minutes
+  - id: sensitive-file-probe
+    when:
+      any:
+        - { field: uri, op: suffix, value: /.env }
+        - { field: uri, op: prefix, value: /.git/ }
+        - { field: uri, op: regex, value: '\.(sql|bak|tar\.gz)$' }
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} tried to access {uri} (status {status})"
+
+  # Threshold: the same IP fails to log in 20 times within 60 seconds
+  - id: login-bruteforce
+    when:
+      all:
+        - { field: uri, op: prefix, value: /login }
+        - { field: request_method, op: eq, value: POST }
+        - { field: status, op: in, value: [401, 403] }
+    group_by: remote_addr
+    threshold: { count: 20, window: 60s }
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} repeated login failures"
+
+  # Site-wide (no grouping): more than 50 5xx responses within a minute
+  - id: upstream-5xx-burst
+    when: { field: status, op: gte, value: 500 }
+    threshold: { count: 50, window: 1m }
+    cooldown: 5m
+    notify: [ops]
+    message: "5xx surge, latest: {request_method} {uri} -> {status}"
+
+  # Slow requests, excluding the export feature that is slow by design
+  - id: slow-request
+    when:
+      all:
+        - { field: request_time, op: gt, value: 5 }
+        - not: { field: uri, op: prefix, value: /export/ }
+    cooldown: 5m
+    notify: [console, ops]
+    message: "{uri} took {request_time}s"

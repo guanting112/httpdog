@@ -1,0 +1,46 @@
+# Fuzz targets for httpdog, run with cargo-fuzz (libFuzzer). This is a separate crate with its own lock file,
+# so nothing here ends up in the httpdog binary. See docs/development.md for how to run them.
+[package]
+name = "httpdog-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+httpdog = { path = ".." }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[[bin]]
+name = "parse_json"
+path = "fuzz_targets/parse_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_combined"
+path = "fuzz_targets/parse_combined.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rule_engine"
+path = "fuzz_targets/rule_engine.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rule_file"
+path = "fuzz_targets/rule_file.rs"
+test = false
+doc = false
+bench = false
+
+# Keep this crate out of any workspace above it
+[workspace]
