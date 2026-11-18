@@ -8,6 +8,9 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16888/badge)](https://www.bestpractices.dev/projects/16888)
 [![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#2-install-on-ubuntu)
 
+- 🐕 **httpdog** (you are here): watches your website's access log and alerts you to suspicious or abnormal requests
+- 🏠 [httpdog-house](https://github.com/guanting112/httpdog-house): collects the alerts from every server's httpdog into one searchable web page, on your own Cloudflare account
+
 English | [繁體中文](README.zh-TW.md)
 
 ![Animation: access log lines flow past a dog drawn in characters. When a line matches a rule, the dog barks and an alert appears in the journal below](docs/demo.gif)
