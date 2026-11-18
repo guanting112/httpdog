@@ -8,6 +8,9 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16888/badge)](https://www.bestpractices.dev/projects/16888)
 [![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#2-安裝到-ubuntu)
 
+- 🐕 **httpdog**(你在這裡):盯著網站的 access log,看到可疑或異常的請求就通知你
+- 🏠 [httpdog-house](https://github.com/guanting112/httpdog-house/blob/main/README.zh-TW.md):把每台主機上 httpdog 的告警收進同一個可以搜尋的網頁,跑在你自己的 Cloudflare 帳號上
+
 [English](README.md) | 繁體中文
 
 ![動畫:access log 一行一行流過一隻用字元畫出來的狗。有一行符合規則時,狗會叫,下方的 journal 出現一則告警](docs/demo.gif)
