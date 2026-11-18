@@ -5,6 +5,7 @@
 [![license](https://img.shields.io/github/license/guanting112/httpdog)](LICENSE)
 [![build provenance: attested](https://img.shields.io/badge/provenance-attested-brightgreen?logo=github)](https://github.com/guanting112/httpdog/attestations)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/guanting112/httpdog/badge)](https://scorecard.dev/viewer/?uri=github.com/guanting112/httpdog)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16888/badge)](https://www.bestpractices.dev/projects/16888)
 [![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#2-install-on-ubuntu)
 
 English | [繁體中文](README.zh-TW.md)
