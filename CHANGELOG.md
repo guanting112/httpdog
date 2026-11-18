@@ -4,6 +4,10 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+### Changed
+
+- Every release also carries its build provenance as `httpdog.intoto.jsonl`, the same content as `httpdog.sigstore.json` under the name OpenSSF Scorecard looks for. The file was added to the five releases already published; their binaries and other files are unchanged.
+
 ### Documentation
 
 - The README and `docs/webhook.md` point to [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project that receives httpdog's webhook alerts, verifies them, and keeps them searchable on web pages, on your own Cloudflare account. The README shows a screenshot of its alerts page, in the reader's light or dark theme.

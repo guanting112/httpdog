@@ -74,7 +74,7 @@ Three more workflows run next to it:
 
 `codeql.yml` and `scorecard.yml` skip themselves while the repository is private, because code scanning and published Scorecard results are only available to public repositories. Dependabot (`.github/dependabot.yml`) opens weekly pull requests for new versions of crates and actions.
 
-When a tag starting with `v` is pushed (e.g. `v0.1.0`), the same workflow, once it passes, publishes the two binaries and `SHA256SUMS` as a Release, with notes taken from the matching section of `CHANGELOG.md`. The release job also signs a build provenance attestation for the binaries and attaches it as `httpdog.sigstore.json`; this step needs a public repository. The tag must match the version in `Cargo.toml` and `CHANGELOG.md` must have a section for that version, or the workflow fails before building.
+When a tag starting with `v` is pushed (e.g. `v0.1.0`), the same workflow, once it passes, publishes the two binaries and `SHA256SUMS` as a Release, with notes taken from the matching section of `CHANGELOG.md`. The release job also signs a build provenance attestation for the binaries and attaches it as `httpdog.sigstore.json`, and again under the name `httpdog.intoto.jsonl`, which is the one OpenSSF Scorecard recognises as provenance; this step needs a public repository. The tag must match the version in `Cargo.toml` and `CHANGELOG.md` must have a section for that version, or the workflow fails before building.
 
 Release steps:
 

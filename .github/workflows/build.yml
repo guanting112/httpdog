@@ -58,13 +58,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Both runners come with rustup. Nothing is downloaded and run here to get it: if a runner
+      # ever lacks it, this step fails and says so
       - name: Install Rust and the musl toolchain
         run: |
-          if ! command -v rustup >/dev/null; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.cargo/bin:$PATH"
-          fi
           rustup toolchain install stable --profile minimal
           rustup default stable
           rustup target add "$TARGET"
@@ -155,15 +152,20 @@ jobs:
         with:
           subject-path: dist/httpdog-linux-*
       # The same attestation as a release asset, so it can be verified with
-      # gh attestation verify --bundle, and Scorecard sees a signed release.
+      # gh attestation verify --bundle. It is attached under two names with the same content:
+      #   httpdog.sigstore.json   what it is, a Sigstore bundle; the README downloads this one
+      #   httpdog.intoto.jsonl    what it holds, an in-toto statement of SLSA provenance, one per line;
+      #                           the name OpenSSF Scorecard looks for to see that a release has provenance
       - name: Attach the attestation bundle
         env:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$BUNDLE" dist/httpdog.sigstore.json
+        run: |
+          cp "$BUNDLE" dist/httpdog.sigstore.json
+          cp "$BUNDLE" dist/httpdog.intoto.jsonl
       - name: Create the Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" dist/httpdog-linux-amd64 dist/httpdog-linux-arm64 dist/SHA256SUMS \
-            dist/httpdog.sigstore.json \
+            dist/httpdog.sigstore.json dist/httpdog.intoto.jsonl \
             --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"

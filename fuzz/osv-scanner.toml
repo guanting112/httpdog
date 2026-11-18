@@ -1,0 +1,11 @@
+# What OSV-Scanner, and through it OpenSSF Scorecard's Vulnerabilities check, should not count
+# against this lock file.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+reason = """
+Not a vulnerability: the advisory says that the unsafe-libyaml crate is no longer maintained. \
+It comes with serde_yaml_ng, which reads the rule file, and the latest serde_yaml_ng still depends \
+on it. The rule file is written by whoever runs httpdog and read at start and on reload; log lines \
+never reach the YAML parser. To be dropped when the YAML library no longer needs the crate.\
+"""
