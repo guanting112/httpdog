@@ -33,7 +33,7 @@ nginx / Apache ──a log line per request──▶ httpdog (matches the rules)
 - **No restart to change rules**: `systemctl reload` applies them; a broken new rule file keeps the old rules, so monitoring never stops
 - **Notifications never slow down log intake**: a dead webhook does not affect matching
 
-It only matches and notifies. It does not store logs and has no query interface; to look back through old logs, use a tool such as Loki or Graylog.
+It only matches and notifies. It does not store logs and has no query interface; to look back through old logs, use a tool such as Loki or Graylog. To keep the alerts themselves and search them in a browser, pair it with [httpdog-house](#a-ready-made-receiver-httpdog-house).
 
 ## Contents
 
@@ -315,6 +315,12 @@ Three things to know:
 3. **Failed deliveries are retried**: a 5-second timeout and 3 attempts in total. If all fail, the alert is written to the system log and given up.
 
 For a description of every field, how to verify the signature and a receiver example you can adapt, see [docs/webhook.md](docs/webhook.md).
+
+### A ready-made receiver: httpdog-house
+
+If you would rather not write a receiver, [httpdog-house](https://github.com/guanting112/httpdog-house) is one made for httpdog, as a separate project. It verifies the signature of every alert, keeps the alerts of all your instances in one place, and shows them on web pages behind a login, where you can search and filter them. It runs on your own Cloudflare account (two Workers and a D1 database, deployed with one command), so you need a Cloudflare account with a domain of yours on it.
+
+To connect an instance, make a key on its **keys** page that lists the instance's name; the page shows the two lines for `secrets.env`. The `instance` in the rule file has to be a name the key lists: alerts from a name no key lists are refused. The steps are in [its README](https://github.com/guanting112/httpdog-house#connect-an-httpdog).
 
 ## 6. Day-to-day operations
 

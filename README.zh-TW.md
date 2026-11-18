@@ -33,7 +33,7 @@ nginx / Apache ──每筆請求的 log──▶ httpdog(照規則比對)──
 - **改規則不用重啟**:改完 `systemctl reload` 就生效;新規則寫錯會沿用舊的,監控不中斷
 - **通知不會拖慢收 log**:webhook 不通也不影響比對
 
-它只做「比對後通知」,不儲存 log、沒有查詢介面。要回頭查歷史 log,請用 Loki 或 Graylog 這類工具。
+它只做「比對後通知」,不儲存 log、沒有查詢介面。要回頭查歷史 log,請用 Loki 或 Graylog 這類工具。要把告警本身存下來、在瀏覽器裡搜尋,可以搭配 [httpdog-house](#現成的接收端httpdog-house)。
 
 ## 目錄
 
@@ -315,6 +315,12 @@ webhook 收到的內容長這樣:
 3. **送不出去會重試**:逾時 5 秒,總共試 3 次,都失敗就把告警寫進系統 log 後放棄。
 
 每個欄位的說明、簽章怎麼驗證、可以直接拿去改的接收端範例,見 [docs/webhook.md](docs/webhook.md)。
+
+### 現成的接收端:httpdog-house
+
+不想自己寫接收端的話,[httpdog-house](https://github.com/guanting112/httpdog-house) 是專為 httpdog 做的接收端,是另一個獨立的專案。它會驗證每則告警的簽章,把每一台 httpdog 的告警存在同一個地方,並顯示在要登入才看得到的網頁上,可以搜尋與篩選。它跑在你自己的 Cloudflare 帳號上(兩個 Worker 加一個 D1 資料庫,一個指令部署),所以需要一個 Cloudflare 帳號,上面要有你自己的網域。
+
+要接上一台 httpdog,在它的 **keys** 頁面建立一把登記了這台 instance 名稱的金鑰,頁面會顯示要寫進 `secrets.env` 的兩行。規則檔的 `instance` 必須是金鑰登記的名稱:沒有任何金鑰登記的名稱,送來的告警會被拒收。步驟見[它的 README](https://github.com/guanting112/httpdog-house/blob/main/README.zh-TW.md#接上一台-httpdog)。
 
 ## 6. 日常維運
 

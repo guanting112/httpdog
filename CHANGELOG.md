@@ -4,6 +4,10 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+### Documentation
+
+- The README and `docs/webhook.md` point to [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project that receives httpdog's webhook alerts, verifies them, and keeps them searchable on web pages, on your own Cloudflare account.
+
 ## [0.2.3] - 2026-11-16
 
 The program behaves the same as 0.2.2. The changes are in the systemd unit file, the documentation, and a guarantee about the code.

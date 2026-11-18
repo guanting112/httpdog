@@ -2,6 +2,8 @@
 
 A webhook is how httpdog hands alerts to your own program: each alert is sent as JSON in an HTTP POST to the URL you choose. Every part of the alert has its own field, so the receiver can route by rule, write to a database, or format it for display.
 
+This page is for writing a receiver of your own. For one that is ready to use, see [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project made for httpdog: it verifies the signature described below, stores the alerts of every instance and shows them on web pages behind a login, all on your own Cloudflare account.
+
 - [Setup](#setup)
 - [What is sent](#what-is-sent)
 - [Signature: confirming the request really came from httpdog](#signature-confirming-the-request-really-came-from-httpdog)
