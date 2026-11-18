@@ -6,7 +6,7 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ### Documentation
 
-- The README and `docs/webhook.md` point to [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project that receives httpdog's webhook alerts, verifies them, and keeps them searchable on web pages, on your own Cloudflare account.
+- The README and `docs/webhook.md` point to [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project that receives httpdog's webhook alerts, verifies them, and keeps them searchable on web pages, on your own Cloudflare account. The README shows a screenshot of its alerts page, in the reader's light or dark theme.
 
 ## [0.2.3] - 2026-11-16
 

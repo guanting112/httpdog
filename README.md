@@ -33,7 +33,14 @@ nginx / Apache ──a log line per request──▶ httpdog (matches the rules)
 - **No restart to change rules**: `systemctl reload` applies them; a broken new rule file keeps the old rules, so monitoring never stops
 - **Notifications never slow down log intake**: a dead webhook does not affect matching
 
-It only matches and notifies. It does not store logs and has no query interface; to look back through old logs, use a tool such as Loki or Graylog. To keep the alerts themselves and search them in a browser, pair it with [httpdog-house](#a-ready-made-receiver-httpdog-house).
+It only matches and notifies. It does not store logs and has no query interface; to look back through old logs, use a tool such as Loki or Graylog. To keep the alerts themselves and search them in a browser, pair it with [httpdog-house](#a-ready-made-receiver-httpdog-house):
+
+<a href="https://github.com/guanting112/httpdog-house">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/httpdog-house-dark.png">
+  <img alt="httpdog-house's alerts page: the last 24 hours as a bar chart, counts per rule and per instance, filters, and the alerts from four instances, newest first" src="docs/httpdog-house-light.png">
+</picture>
+</a>
 
 ## Contents
 

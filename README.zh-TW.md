@@ -33,7 +33,14 @@ nginx / Apache ──每筆請求的 log──▶ httpdog(照規則比對)──
 - **改規則不用重啟**:改完 `systemctl reload` 就生效;新規則寫錯會沿用舊的,監控不中斷
 - **通知不會拖慢收 log**:webhook 不通也不影響比對
 
-它只做「比對後通知」,不儲存 log、沒有查詢介面。要回頭查歷史 log,請用 Loki 或 Graylog 這類工具。要把告警本身存下來、在瀏覽器裡搜尋,可以搭配 [httpdog-house](#現成的接收端httpdog-house)。
+它只做「比對後通知」,不儲存 log、沒有查詢介面。要回頭查歷史 log,請用 Loki 或 Graylog 這類工具。要把告警本身存下來、在瀏覽器裡搜尋,可以搭配 [httpdog-house](#現成的接收端httpdog-house):
+
+<a href="https://github.com/guanting112/httpdog-house/blob/main/README.zh-TW.md">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/httpdog-house-dark.zh-TW.png">
+  <img alt="httpdog-house 的告警頁面:最近 24 小時的長條圖、各 rule 與各 instance 的數量、篩選條件,以及四台 instance 送來的告警,最新的在最上面" src="docs/httpdog-house-light.zh-TW.png">
+</picture>
+</a>
 
 ## 目錄
 
