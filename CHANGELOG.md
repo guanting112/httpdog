@@ -4,6 +4,10 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-22
+
+The program is unchanged. This release is for the files that come with it: the example rule file the install downloads is much shorter, and there is a seventh rule template.
+
 ### Added
 
 - A seventh rule template, `examples/06-private-data.yaml`, for private files and customer data: guessing the names of uploaded files (ID scans, contracts, spreadsheets), bulk downloads of documents, walking through record numbers, one address opening member records or orders in the admin area in bulk, and every export from the admin area.
@@ -139,7 +143,8 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/guanting112/httpdog/releases/tag/v0.3.1
 [0.3.0]: https://github.com/guanting112/httpdog/releases/tag/v0.3.0
 [0.2.3]: https://github.com/guanting112/httpdog/releases/tag/v0.2.3
 [0.2.2]: https://github.com/guanting112/httpdog/releases/tag/v0.2.2
