@@ -89,8 +89,7 @@ jobs:
         run: |
           "$BIN" --version
           for f in rules.example.yaml examples/*.yaml; do
-            printf '%s: ' "$f"
-            "$BIN" --check --config "$f" 2>&1
+            "$BIN" -t --config "$f" 2>&1
           done
           expect() { # rule file, log file, expected ALERT count
             out=$("$BIN" --stdin --config "$1" < "$2" 2>&1)

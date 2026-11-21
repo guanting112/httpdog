@@ -1,6 +1,6 @@
 # Rule file
 
-The full reference for the rule file. If this is your first time, start with ["Write rules" in the README](../README.md#4-write-rules).
+The full reference for the rule file. If this is your first time, start with ["Write rules" in the README](../README.md#3-write-rules).
 
 - [What the file looks like](#what-the-file-looks-like)
 - [Top-level keys](#top-level-keys)

@@ -87,10 +87,18 @@ enum Matcher {
 impl Engine {
     /// Compile the config into an engine; every error is reported here, none is left for run time
     pub fn from_config(cfg: Config) -> Result<Engine, String> {
+        Engine::from_config_with(cfg, &[])
+    }
+
+    /// The same, for a caller that is not the service: `also` are variables the service will have in its
+    /// environment and this process does not (what `httpdog -t` read from the secrets file). A variable the
+    /// rule file refers to is looked up in the environment first and here second
+    pub fn from_config_with(cfg: Config, also: &[(String, String)]) -> Result<Engine, String> {
         let instance = resolve_instance(cfg.instance).map_err(|e| format!("instance: {e}"))?;
         let mut notifiers: HashMap<String, Target> = HashMap::new();
         for (name, def) in cfg.notifiers {
-            let target = resolve_notifier(def).map_err(|e| format!("notifier {name:?}: {e}"))?;
+            let target =
+                resolve_notifier(def, also).map_err(|e| format!("notifier {name:?}: {e}"))?;
             notifiers.insert(name, target);
         }
         // Several rules may point at the same notifier, so targets are shared through an Arc
@@ -287,7 +295,7 @@ fn resolve_instance(instance: Option<String>) -> Result<Arc<str>, String> {
     Ok(name.into())
 }
 
-fn resolve_notifier(def: NotifierDef) -> Result<Target, String> {
+fn resolve_notifier(def: NotifierDef, also: &[(String, String)]) -> Result<Target, String> {
     match def {
         NotifierDef::Stderr {} => Ok(Target::Stderr),
         NotifierDef::Webhook {
@@ -298,7 +306,7 @@ fn resolve_notifier(def: NotifierDef) -> Result<Target, String> {
         } => {
             let url = match (url, url_env) {
                 (Some(url), None) => url,
-                (None, Some(var)) => env_value(&var)?,
+                (None, Some(var)) => env_value(&var, also)?,
                 _ => return Err("exactly one of url / url_env is required".into()),
             };
             // Signing is mandatory: a webhook without a secret is never allowed to start.
@@ -306,7 +314,7 @@ fn resolve_notifier(def: NotifierDef) -> Result<Target, String> {
             // misconfiguration is hard to notice afterwards
             let secret = match (secret, secret_env) {
                 (Some(secret), None) => secret,
-                (None, Some(var)) => env_value(&var)?,
+                (None, Some(var)) => env_value(&var, also)?,
                 (None, None) => {
                     return Err(
                         "a webhook must have a signing secret: add secret_env (or secret, for testing)".into(),
@@ -325,9 +333,14 @@ fn resolve_notifier(def: NotifierDef) -> Result<Target, String> {
 }
 
 /// Read an environment variable. Unset and empty are both errors: a missing secret must be caught at load time
-fn env_value(var: &str) -> Result<String, String> {
-    match std::env::var(var) {
-        Ok(value) if !value.is_empty() => Ok(value),
+fn env_value(var: &str, also: &[(String, String)]) -> Result<String, String> {
+    if let Ok(value) = std::env::var(var)
+        && !value.is_empty()
+    {
+        return Ok(value);
+    }
+    match also.iter().find(|(name, _)| name == var) {
+        Some((_, value)) if !value.is_empty() => Ok(value.clone()),
         _ => Err(format!("environment variable {var} is not set")),
     }
 }
@@ -1044,6 +1057,19 @@ mod tests {
 
         assert!(compile_err(&cfg(", secret: a, secret_env: X")).contains("only one"));
         assert!(compile_err(&cfg(", secret: ''")).contains("empty"));
+        // What `httpdog -t` passes in from the secrets file counts as set; an empty value there does not
+        let from_file = |value: &str| {
+            let cfg: Config =
+                serde_yaml_ng::from_str(&cfg(", secret_env: HTTPDOG_TEST_SECRET_THAT_IS_NOT_SET"))
+                    .unwrap();
+            let also = [(
+                "HTTPDOG_TEST_SECRET_THAT_IS_NOT_SET".to_string(),
+                value.to_string(),
+            )];
+            Engine::from_config_with(cfg, &also).map(|_| ())
+        };
+        assert_eq!(from_file("k"), Ok(()));
+        assert!(from_file("").unwrap_err().contains("is not set"));
         // Unset environment variable: must fail at load time, and the message must name the variable
         let err = compile_err(&cfg(", secret_env: HTTPDOG_TEST_SECRET_THAT_IS_NOT_SET"));
         assert!(err.contains("HTTPDOG_TEST_SECRET_THAT_IS_NOT_SET"), "{err}");

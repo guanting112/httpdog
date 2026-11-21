@@ -42,5 +42,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "secrets_file"
+path = "fuzz_targets/secrets_file.rs"
+test = false
+doc = false
+bench = false
+
 # Keep this crate out of any workspace above it
 [workspace]

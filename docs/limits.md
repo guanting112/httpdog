@@ -120,6 +120,19 @@ Tested on 2026-11-21 on freshly installed servers at a cloud provider: amd64 KVM
 - **How much waits**: 513 of 1500 on three of the servers. On Rocky Linux 9.8, where nginx gave every request to the same worker, 167, and 167 of the 300 sent while the watchdog was waiting; on the other three all 300.
 - **Messages that differ between versions**: nginx 1.20 reports the SELinux denial without `while logging to syslog`; systemd 259 puts the group in quotes, `Failed to resolve group 'nosuchgroup'`.
 
+**The install in the README, and `httpdog -t`**
+
+Tested on 2026-11-21 on the same four cloud servers, first with a static amd64 build of the working tree and then with the amd64 binary CI built for the commit, checked against the checksum CI published with it. Each server was first put back to a state without httpdog, then the six steps of the README were followed as written, except that the files of steps 1 and 2 were copied to the server, since no release carries them yet. 15 checks, all passed both times on Ubuntu 24.04, Debian 13, Rocky Linux 9.8 and Fedora 44.
+
+With the binary CI built, the checks of the two sections above were repeated as well, a reboot of each server included: 57 on Ubuntu 24.04 and Debian 13, 66 on Rocky Linux 9.8 and Fedora 44, and 57 in the local Ubuntu 24.04 machine with the arm64 binary. One check failed once on Ubuntu 24.04, the one about a group that does not exist; it passed in six repeats and in a second full run, so it is taken for a matter of timing in the test and not of httpdog.
+
+- **The six steps**: `sudo httpdog -t` prints `OK: /etc/httpdog/rules.yaml: 4 rule(s)`; both units are enabled and active; nginx accepts the snippet placed in `/etc/nginx/conf.d/` and reloads; after the one request, the last 5 lines of the log hold the started line and the alert, word for word as the README shows them; with the placeholder URL the alert is followed by `webhook attempt 1 failed`.
+- **`httpdog -t`**: with an empty `secrets.env` it names the missing variable and exits with 78; without `sudo` it says the secrets file could not be read and to use `sudo`, and shows no value from it; `--config` on another file reads `secrets.env` too, and on a broken file exits with 78 and names the file; `sudo httpdog -t && sudo systemctl reload httpdog` ends with `rules reloaded`.
+- **The same answer as the service**: with quoted values in `secrets.env` (a URL with `&` in single quotes, a secret with a space in double quotes) the check passes and the service starts; with an empty secret the check fails and the service fails, for the same reason.
+- **Reading `secrets.env` the way systemd does**: a file with 40 assignments of every kind (quotes, escapes, comments, values over several lines, names systemd refuses) was given to systemd as an `EnvironmentFile` on systemd 247, 249, 252, 255, 257 and 259. All six made the same of it, and httpdog's reader makes the same; the file and systemd's answer are in `tests/data/`, and a unit test compares them.
+- **On Rocky Linux 9.8** `sudo` does not look in `/usr/local/bin`: `sudo httpdog -t` ends with `command not found`, and `sudo /usr/local/bin/httpdog -t` works. The README says so.
+- **A site with its own `access_log`**: a `server { }` block with an `access_log` line of its own raised no alert, and one without raised one, with the snippet in `conf.d` in both cases (nginx 1.24.0).
+
 **The 0.2.0 release on cloud servers**
 
 Tested on 2026-11-16 on freshly installed servers at a cloud provider. Each is an amd64 KVM virtual machine running the distribution's own kernel, with the distribution's default AppArmor or SELinux setting left as it was. httpdog was installed by following the README, with the amd64 binary of the 0.2.0 release and the files of the `v0.2.0` tag.

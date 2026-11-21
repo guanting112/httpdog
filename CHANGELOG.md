@@ -6,6 +6,10 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 Restarting httpdog no longer loses log lines. This changes how httpdog is installed under systemd: there are now two unit files, and an existing install has to be upgraded by hand, see below.
 
+### Added
+
+- `httpdog -t` checks the rule file the way `nginx -t` checks nginx's configuration. `-t` is `--check` under a shorter name, with two things that make `sudo httpdog -t` enough on an installed host. Without `--config` it checks `/etc/httpdog/rules.yaml`. And a variable the rule file refers to that is not in the environment is looked up in `/etc/httpdog/secrets.env`, read the way systemd reads it, so the check no longer ends in `environment variable ... is not set` for lack of the webhook URL and secret. The answer names the file: `OK: /etc/httpdog/rules.yaml: 4 rule(s)`.
+
 ### Fixed
 
 - A restart of httpdog lost one log line for every nginx worker, and every line sent while it was down. httpdog created its socket itself, so each restart made a new one: nginx's workers were still connected to the old one, and each found out by losing its next line. Unless nginx was reloaded right after, a probe that happened to be a worker's first request after the restart raised no alert. Now systemd creates the socket and holds it (`deploy/httpdog.socket`), and passes it to httpdog at every start. A restart keeps the same socket, nginx needs no reload, and the lines sent in the meantime wait in the socket until httpdog is back: a few hundred fit, 512 at most. This covers `systemctl restart`, a crash, the watchdog and the memory ceiling.
@@ -29,11 +33,14 @@ Restarting httpdog no longer loses log lines. This changes how httpdog is instal
 - **Stopping httpdog alone does not keep it stopped.** The socket stays with systemd, and the next log line starts httpdog again. Use `sudo systemctl stop httpdog.socket httpdog`.
 - **After a rule file error at startup** (exit status 78), systemd tries a few more times when a log line arrives and then stops `httpdog.socket` too. Fix the file, then `sudo systemctl start httpdog && sudo systemctl reload nginx`.
 - httpdog started without systemd, or without `httpdog.socket`, creates its socket itself as before.
+- `--check` without `--config` now checks `/etc/httpdog/rules.yaml`, where it used to check `./rules.yaml`, and its answer starts with the name of the file. Running httpdog without `--config` still uses `./rules.yaml`.
 - A new dependency, `sd-listen-fds` (142 lines, no dependencies of its own), takes the socket systemd passes. That step needs `unsafe` in Rust, which httpdog's own code still forbids.
 - Every release also carries its build provenance as `httpdog.intoto.jsonl`, the same content as `httpdog.sigstore.json` under the name OpenSSF Scorecard looks for. The file was added to the five releases already published; their binaries and other files are unchanged.
 
 ### Documentation
 
+- The README starts with the install, and the install is one path from the download to a first alert: it now includes connecting nginx (the snippet goes into `/etc/nginx/conf.d/`), a placeholder for whoever has no receiver yet, and reading httpdog's log. The "Try it first" section is gone; replaying the sample log to test a receiver is in `docs/webhook.md`.
+- New in the README and `docs/log-format.md`: a `server { }` block with an `access_log` line of its own does not use the one for httpdog, and needs the line as well.
 - The README and `docs/webhook.md` point to [httpdog-house](https://github.com/guanting112/httpdog-house), a separate project that receives httpdog's webhook alerts, verifies them, and keeps them searchable on web pages, on your own Cloudflare account. The README shows a screenshot of its alerts page, in the reader's light or dark theme.
 
 ## [0.2.3] - 2026-11-16

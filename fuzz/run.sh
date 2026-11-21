@@ -32,6 +32,7 @@ done <../sample.combined.log
 for f in ../rules.example.yaml ../examples/*.yaml; do
 	{ printf 0; cat "$f"; } >"corpus/rule_file/seed-$(basename "$f")"
 done
+cp ../tests/data/secrets.env corpus/secrets_file/seed-corpus
 
 logs=$(mktemp -d)
 for t in $targets; do

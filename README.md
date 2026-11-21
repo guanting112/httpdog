@@ -6,7 +6,7 @@
 [![build provenance: attested](https://img.shields.io/badge/provenance-attested-brightgreen?logo=github)](https://github.com/guanting112/httpdog/attestations)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/guanting112/httpdog/badge)](https://scorecard.dev/viewer/?uri=github.com/guanting112/httpdog)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16888/badge)](https://www.bestpractices.dev/projects/16888)
-[![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#2-install-on-ubuntu)
+[![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#1-install-on-ubuntu)
 
 - 🐕 **httpdog** (you are here): watches your website's access log and alerts you to suspicious or abnormal requests
 - 🏠 [httpdog-house](https://github.com/guanting112/httpdog-house): collects the alerts from every server's httpdog into one searchable web page, on your own Cloudflare account
@@ -48,59 +48,18 @@ It only matches and notifies. It does not store logs and has no query interface;
 
 ## Contents
 
-1. [Try it first](#1-try-it-first)
-2. [Install on Ubuntu](#2-install-on-ubuntu)
-3. [Feed it logs](#3-feed-it-logs)
-4. [Write rules](#4-write-rules)
-5. [Receive notifications](#5-receive-notifications)
-6. [Day-to-day operations](#6-day-to-day-operations)
-7. [Troubleshooting](#7-troubleshooting)
+1. [Install on Ubuntu](#1-install-on-ubuntu)
+2. [Feed it logs](#2-feed-it-logs)
+3. [Write rules](#3-write-rules)
+4. [Receive notifications](#4-receive-notifications)
+5. [Day-to-day operations](#5-day-to-day-operations)
+6. [Troubleshooting](#6-troubleshooting)
 
 Also: [Command line](#command-line), [More documentation](#more-documentation), [Development](#development)
 
-## 1. Try it first
+## 1. Install on Ubuntu
 
-No nginx needed: download the binary from the latest release, replay the bundled `sample.log` and watch the rules fire. The binaries are for Linux on amd64 and arm64; on anything else, [build it from source](#building-from-source).
-
-```bash
-# The binary, from the latest release. dpkg prints amd64 or arm64;
-# without dpkg, set ARCH by hand (uname -m: x86_64 is amd64, aarch64 is arm64)
-ARCH=$(dpkg --print-architecture)
-curl -fsSLo httpdog "https://github.com/guanting112/httpdog/releases/latest/download/httpdog-linux-$ARCH"
-chmod +x httpdog
-
-# The example rule file and a sample log, from the same version as the binary
-RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(./httpdog --version | cut -d' ' -f2)"
-curl -fsSLO "$RAW/rules.example.yaml"
-curl -fsSLO "$RAW/sample.log"
-
-# The example rules send alerts to a webhook. Without a receiver yet, use a dummy URL and secret
-export HTTPDOG_WEBHOOK_URL=http://127.0.0.1:9/dummy
-export HTTPDOG_WEBHOOK_SECRET=dummy
-
-./httpdog --check --config rules.example.yaml          # Check the rule file for mistakes
-./httpdog --stdin --config rules.example.yaml < sample.log
-```
-
-Expected output:
-
-```
-httpdog started: 4 rule(s), reading from stdin
-ALERT [httpdog] sensitive-file-probe | 203.0.113.7 tried to access /.env (status 404) | remote_addr=203.0.113.7
-ALERT [httpdog] slow-request | /report/monthly took 7.31s
-ALERT [httpdog] sensitive-file-probe | 192.0.2.44 tried to access /backup/db.sql (status 404) | remote_addr=192.0.2.44
-done: 6 lines, 0 unparseable, 3 alerts fired
-```
-
-Each `ALERT` line is one notification. In `sample.log` the first IP goes on to probe `/.git/config`, but that IP was just notified (it is still in its cooldown), so there is no second notification.
-
-With the dummy URL, each `ALERT` is followed by a few `webhook attempt N failed` lines and the whole run takes about 9 seconds. That is expected: the URL is fake, so nothing can be delivered.
-
-**To test your own webhook receiver at the same time**, set the two environment variables to the real URL and secret and run it again. The receiver gets these 3 alerts and no failure lines appear. If you have no receiver yet, start one locally from the example in [docs/webhook.md](docs/webhook.md#receiver-example).
-
-## 2. Install on Ubuntu
-
-Every [release](https://github.com/guanting112/httpdog/releases) ships prebuilt binaries for amd64 and arm64. They need no Rust and run on any Ubuntu version.
+Every [release](https://github.com/guanting112/httpdog/releases) ships prebuilt binaries for amd64 and arm64. They need no Rust and run on any Ubuntu version. The six steps below end with a request to your own site showing up as an alert.
 
 ```bash
 # 1. The binary, from the latest release. dpkg prints amd64 or arm64
@@ -111,25 +70,55 @@ sha256sum --check --ignore-missing SHA256SUMS      # Should print httpdog-linux-
 sudo install -m 755 "httpdog-linux-$ARCH" /usr/local/bin/httpdog
 httpdog --version
 
-# 2. The example rule file and the two systemd units, from the same version as the binary
+# 2. The example rule file, the two systemd units and the nginx snippet, from the same version as the binary
 RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(httpdog --version | cut -d' ' -f2)"
 curl -fsSLO "$RAW/rules.example.yaml"
 curl -fsSLO "$RAW/deploy/httpdog.service"
 curl -fsSLO "$RAW/deploy/httpdog.socket"
+curl -fsSLO "$RAW/deploy/nginx-snippet.conf"
 sudo install -d /etc/httpdog
 sudo install -m 644 rules.example.yaml /etc/httpdog/rules.yaml
 
 # 3. Secrets (the webhook URL and secret), readable by root only
 sudo install -m 600 /dev/null /etc/httpdog/secrets.env
-sudoedit /etc/httpdog/secrets.env      # Add HTTPDOG_WEBHOOK_URL=https://<your receiver>/...
-                                       # and HTTPDOG_WEBHOOK_SECRET=<a value from openssl rand -hex 32>
+sudoedit /etc/httpdog/secrets.env
+```
 
-# 4. Hand it to systemd
+`secrets.env` gets two lines. They say where alerts are sent and what they are signed with:
+
+```
+HTTPDOG_WEBHOOK_URL=https://<your receiver>/...
+HTTPDOG_WEBHOOK_SECRET=<a value from openssl rand -hex 32>
+```
+
+**Nothing to receive alerts yet?** Write `http://127.0.0.1:9/none` as the URL and any secret, and go on. Every alert is also written to httpdog's log, which is where step 6 looks; the webhook just fails until you put a real one in ([section 4](#4-receive-notifications)).
+
+```bash
+# 4. Check the rule file, then hand httpdog to systemd
+sudo httpdog -t                          # Should print OK: /etc/httpdog/rules.yaml: 4 rule(s)
 sudo install -m 644 httpdog.service httpdog.socket /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now httpdog      # Enables and starts httpdog.socket along with it
-systemctl status httpdog
+
+# 5. Have nginx send its access log to httpdog
+sudo install -m 644 nginx-snippet.conf /etc/nginx/conf.d/httpdog.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 6. See it work: ask your own site for a file the example rules watch, then read httpdog's log
+curl -s -o /dev/null http://127.0.0.1/.env
+journalctl -u httpdog -n 5
 ```
+
+The log should have these two lines, the second being the alert (the status is whatever your site answers):
+
+```
+httpdog started: 4 rule(s), listening on unix:/run/httpdog/httpdog.sock (socket held by systemd)
+ALERT [httpdog] sensitive-file-probe | 127.0.0.1 tried to access /.env (status 404) | remote_addr=127.0.0.1
+```
+
+**That log is where everything httpdog does shows up**: alerts, webhook failures, the result of a reload, and the reason when it does not start. `journalctl -u httpdog -f` follows it live. With the placeholder URL of step 3, each `ALERT` is followed by a few `webhook attempt N failed` lines; that is the fake URL, not a fault.
+
+**No `ALERT`?** The usual reason is in step 5: a `server { }` block with an `access_log` line of its own does not use the one in `conf.d`. Add the `access_log syslog:...` line from `/etc/nginx/conf.d/httpdog.conf` inside that `server { }` block as well, and reload nginx. Other reasons are in [Troubleshooting](#6-troubleshooting).
 
 Notes:
 
@@ -141,8 +130,10 @@ Notes:
   gh attestation verify "httpdog-linux-$ARCH" -R guanting112/httpdog --bundle httpdog.sigstore.json
   ```
 
+- `sudo httpdog -t` checks `/etc/httpdog/rules.yaml` the way `nginx -t` checks nginx's configuration, and reads `secrets.env` itself. Run it after every change to the rule file, before a reload.
 - There are two unit files: `httpdog.socket` is the socket logs arrive on, which systemd creates and keeps, and `httpdog.service` is the program. Because systemd holds the socket, restarting httpdog loses no log lines.
-- `httpdog.socket` assumes nginx's workers run as the `www-data` group, as they do on Ubuntu and Debian. Elsewhere (Fedora and Rocky Linux use `nginx`), change `www-data` in `httpdog.socket` before step 4. Where SELinux is enforcing, which is the default on those two, there is one more step. Both are in [who can send logs](#who-can-send-logs).
+- `httpdog.socket` assumes nginx's workers run as the `www-data` group, as they do on Ubuntu and Debian. Elsewhere (Fedora and Rocky Linux use `nginx`), change `www-data` in `httpdog.socket` before step 4. Where SELinux is enforcing, which is the default on those two, there is one more step. Both are in [who can send logs](#who-can-send-logs). On RHEL and Rocky Linux `sudo` does not look in `/usr/local/bin`, so write `sudo /usr/local/bin/httpdog -t` there.
+- Step 5 uses the JSON log format, which the example rule file needs. To leave nginx's log format alone, or for Apache, see [section 2](#2-feed-it-logs).
 - The service needs no account created in advance (the unit file uses `DynamicUser`). systemd reads `secrets.env` as root before dropping privileges, so the service itself cannot touch that file.
 - The rule templates under `examples/` are in the repository, not in the release: `git clone`, or download the Source code archive on the release page.
 
@@ -158,9 +149,9 @@ cargo build --release
 
 To install that build, use `sudo install -m 755 target/release/httpdog /usr/local/bin/` in place of step 1 above; `rules.example.yaml` and the two unit files under `deploy/` are already in the clone.
 
-## 3. Feed it logs
+## 2. Feed it logs
 
-httpdog understands two log formats. Pick one:
+Step 5 of the install already connected nginx, with the JSON format. This section is for the other format, for Apache, and for the details. httpdog understands two log formats:
 
 | | Option 1: the default format (`combined`) | Option 2: JSON |
 |---|---|---|
@@ -193,7 +184,7 @@ Apache connects differently; see [docs/log-format.md](docs/log-format.md#apache)
 
 ### Option 2: JSON
 
-Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }`, then run `sudo nginx -t && sudo systemctl reload nginx`:
+This is what step 5 of the install set up. `deploy/nginx-snippet.conf` goes inside nginx's `http { }`, which is where a file in `/etc/nginx/conf.d/` ends up; then `sudo nginx -t && sudo systemctl reload nginx`:
 
 ```nginx
 log_format httpdog escape=json
@@ -216,6 +207,7 @@ access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname htt
 ### Notes for both options
 
 - An existing `access_log` that writes to a file can stay; several `access_log` lines may sit at the same level.
+- **A `server { }` block with an `access_log` line of its own does not use the one in `http { }`.** nginx takes the lines of the innermost level that has any. For such a site, put the `access_log syslog:...` line inside its `server { }` block too, or it sends httpdog nothing.
 - When the site is behind Cloudflare or another reverse proxy, set up nginx's `real_ip` first. Otherwise every log line has the proxy's IP as its source, and "each IP counted separately" turns into everyone counted together.
 
 For the content and type of each field and what to watch out for, see [docs/log-format.md](docs/log-format.md).
@@ -236,7 +228,7 @@ httpdog believes every log line it receives, so it matters who is able to send o
 
 Details are in [docs/log-format.md](docs/log-format.md#how-logs-reach-httpdog).
 
-## 4. Write rules
+## 3. Write rules
 
 The rule file is a YAML file (JSON works too); a complete example is in `rules.example.yaml`. The one below has a single rule: **notify when the same IP fails to log in 20 times within 60 seconds**.
 
@@ -293,7 +285,7 @@ There are 6 rule files under `examples/`. Each is a complete config that loads a
 
 The thresholds and paths in the templates are placeholders; replace them with your site's real numbers and paths. For what to check before using them, see [docs/rules.md](docs/rules.md#using-the-rule-templates).
 
-## 5. Receive notifications
+## 4. Receive notifications
 
 Notifications can go to two places, set under `notifiers` in the rule file:
 
@@ -327,7 +319,7 @@ Three things to know:
 2. **`instance` tells you which instance sent it.** When several httpdog instances send to the same receiver, give each a different `instance` in its rule file; it is `unknown` when not set.
 3. **Failed deliveries are retried**: a 5-second timeout and 3 attempts in total. If all fail, the alert is written to the system log and given up.
 
-For a description of every field, how to verify the signature and a receiver example you can adapt, see [docs/webhook.md](docs/webhook.md).
+For a description of every field, how to verify the signature and a receiver example you can adapt, see [docs/webhook.md](docs/webhook.md). It also shows how to [send a receiver three test alerts](docs/webhook.md#testing-your-receiver) from a sample log, without touching the installed service.
 
 ### A ready-made receiver: httpdog-house
 
@@ -335,10 +327,11 @@ If you would rather not write a receiver, [httpdog-house](https://github.com/gua
 
 To connect an instance, make a key on its **keys** page that lists the instance's name; the page shows the two lines for `secrets.env`. The `instance` in the rule file has to be a name the key lists: alerts from a name no key lists are refused. The steps are in [its README](https://github.com/guanting112/httpdog-house#connect-an-httpdog).
 
-## 6. Day-to-day operations
+## 5. Day-to-day operations
 
 ```bash
 journalctl -u httpdog -f            # Follow the log (alerts, retries and reload results all show up here)
+sudo httpdog -t                     # Check the rule file, like nginx -t
 sudo systemctl reload httpdog       # Apply new rules
 sudo systemctl restart httpdog      # After changing secrets.env, or installing a new version
 sudo systemctl stop httpdog.socket httpdog      # Stop it for good
@@ -346,24 +339,26 @@ sudo systemctl stop httpdog.socket httpdog      # Stop it for good
 
 A restart loses no log lines. systemd holds the socket, not httpdog, so nginx stays connected, and the lines it sends while httpdog is away wait in the socket until it is back (a few hundred fit, see [docs/log-format.md](docs/log-format.md#the-unix-socket)). For the same reason, stopping httpdog alone does not keep it stopped: the next log line starts it again. Stop `httpdog.socket` with it.
 
-**Recommended way to change rules**: check first, then replay a recent log to see how often they fire, and only then reload.
+**To change rules**: edit, check, reload. The same three steps as with nginx.
 
 ```bash
-# 1. Check the rule file. Only root can read secrets.env, so load the environment variables first or the check fails
-sudo bash -c 'set -a; . /etc/httpdog/secrets.env; set +a
-  httpdog --check --config /etc/httpdog/rules.yaml'
-
-# 2. Replay a recent log; the number of alerts fired is printed at the end
-#    (if the rule file uses a webhook, load the environment variables first here too)
-httpdog --stdin --config new-rules.yaml < access.log
-
-# 3. Apply
-sudo systemctl reload httpdog
+sudoedit /etc/httpdog/rules.yaml
+sudo httpdog -t && sudo systemctl reload httpdog
 journalctl -u httpdog -n 5          # Confirm that "rules reloaded" appears
 ```
 
-- Step 1 reads `secrets.env` with the shell, so when the URL contains special characters such as `&`, wrap the value in single quotes in that file.
-- The replay in step 2 really sends the alerts that fire. To leave the receiver alone, change `notify` in the new rules to `console` only, and change it back once you are happy with them.
+- `sudo httpdog -t` prints `OK: /etc/httpdog/rules.yaml: 4 rule(s)`, or the mistake and where it is. It reads the webhook URL and secret from `/etc/httpdog/secrets.env` the way systemd does, which is why it needs `sudo`.
+- To check a file before putting it in place: `sudo httpdog -t --config new-rules.yaml`.
+- A reload with a broken rule file keeps the old rules, so a skipped check does not stop the monitoring. The reason is in the log.
+
+**To see how often new rules would fire** before applying them, replay a recent log. The number of alerts fired is printed at the end:
+
+```bash
+httpdog --stdin --config new-rules.yaml < access.log
+```
+
+- A rule file with a webhook needs the two variables of `secrets.env` in the environment for this; `export` them first.
+- The replay really sends the alerts that fire. To leave the receiver alone, change `notify` in the new rules to `console` only, and change it back once you are happy with them.
 
 **Send one test line by hand** to confirm the whole path works (JSON format, with a rule that matches `/.env`):
 
@@ -374,11 +369,11 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 
 `sudo` is needed because only root and nginx's group may write to the socket. Without it the command ends with `Permission denied`, which is the protection doing its job.
 
-## 7. Troubleshooting
+## 6. Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| No alerts at all | nginx's `server=` does not match `listen` in the rule file; nginx's workers are not in the group `httpdog.socket` opens the socket to (nginx's error log shows `Permission denied`), or SELinux is enforcing and the policy file is not installed (the same `Permission denied`), see [who can send logs](#who-can-send-logs); or the log format does not match `format` in the rule file (the summary at exit shows many `unparseable` lines) |
+| No alerts at all | The site's `server { }` block has an `access_log` line of its own, so it does not use the one for httpdog (add the line there too, see [notes for both options](#notes-for-both-options)); nginx's `server=` does not match `listen` in the rule file; nginx's workers are not in the group `httpdog.socket` opens the socket to (nginx's error log shows `Permission denied`), or SELinux is enforcing and the policy file is not installed (the same `Permission denied`), see [who can send logs](#who-can-send-logs); or the log format does not match `format` in the rule file (the summary at exit shows many `unparseable` lines) |
 | The log shows `warning: listening on UDP ...` | `listen` in the rule file is a UDP address, and any program that can reach it can send httpdog fake logs. To get the unix socket back, undo the three places that name the UDP address: remove the `listen` line, put `ListenDatagram=/run/httpdog/httpdog.sock` back in `httpdog.socket`, and change nginx's `server=` to `unix:/run/httpdog/httpdog.sock`. Then run `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket && sudo systemctl reload nginx` |
 | A reload says `reload failed, keeping the old rules: listen is now ...` | The rule file names another address than the socket systemd holds. A reload cannot move httpdog to another address, and with that rule file httpdog would not start after the next reboot. Change `listen` back; or, to really move, see [docs/log-format.md](docs/log-format.md#the-unix-socket) |
 | Does not start: `config error: the socket systemd passed is not the one the rule file names` | `listen` in the rule file and `ListenDatagram=` in `httpdog.socket` name different addresses. Make them the same, then `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket`. With the default socket, the rule file needs no `listen` line at all |
@@ -396,10 +391,12 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 ## Command line
 
 ```
-httpdog [--config rules.yaml] [--check] [--stdin] [--version]
+httpdog [--config rules.yaml] [-t] [--stdin] [--version]
 
   -c, --config <file>  rule file, default ./rules.yaml
-      --check          validate the rule file and exit
+  -t, --check          check the rule file and exit, like nginx -t. Without --config it checks
+                       /etc/httpdog/rules.yaml; variables the rule file refers to that are not
+                       in the environment are read from /etc/httpdog/secrets.env
       --stdin          read logs from stdin instead of listening on a socket
   -V, --version        print the version (e.g. httpdog 0.2.3) and exit
 ```
@@ -419,7 +416,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
 | 0 | Normal exit |
 | 1 | Cannot listen on the address in `listen` |
 | 2 | Invalid command-line arguments |
-| 78 | Rule file error. systemd does not restart it in this case (the unit file sets `RestartPreventExitStatus=78`) |
+| 78 | Rule file error, which is also what `-t` exits with when the check fails. systemd does not restart it in this case (the unit file sets `RestartPreventExitStatus=78`) |
 
 ## More documentation
 

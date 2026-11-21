@@ -12,7 +12,7 @@
 use httpdog::{
     config::{Config, Listen},
     engine::Engine,
-    format, notify,
+    envfile, format, notify,
 };
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use std::{
@@ -41,17 +41,21 @@ use std::{
 /// so systemd does not restart forever when the config is broken
 const EXIT_CONFIG: i32 = 78;
 const LINE_QUEUE: usize = 8192;
+/// Where the README installs the rule file and the secrets: what `httpdog -t` looks at when told nothing else
+const INSTALLED_RULES: &str = "/etc/httpdog/rules.yaml";
+const INSTALLED_ENV_FILE: &str = "/etc/httpdog/secrets.env";
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 struct Args {
-    config: PathBuf,
+    /// None when --config was not given: ./rules.yaml to run, the installed rule file to check
+    config: Option<PathBuf>,
     check: bool,
     stdin: bool,
 }
 
 fn parse_args() -> Args {
     let mut args = Args {
-        config: PathBuf::from("rules.yaml"),
+        config: None,
         check: false,
         stdin: false,
     };
@@ -59,10 +63,10 @@ fn parse_args() -> Args {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-c" | "--config" => match it.next() {
-                Some(path) => args.config = path.into(),
+                Some(path) => args.config = Some(path.into()),
                 None => usage("--config needs a file path"),
             },
-            "--check" => args.check = true,
+            "-t" | "--check" => args.check = true,
             "--stdin" => args.stdin = true,
             "-h" | "--help" => usage(""),
             // The version is a query result, not a log line, so it goes to stdout and `httpdog --version` can be piped
@@ -81,10 +85,12 @@ fn usage(err: &str) -> ! {
         eprintln!("{err}\n");
     }
     eprintln!(
-        "usage: httpdog [--config rules.yaml] [--check] [--stdin] [--version]\n\
+        "usage: httpdog [--config rules.yaml] [-t] [--stdin] [--version]\n\
          \n\
          \x20 -c, --config <file>  rule file (.yaml / .yml / .json), default ./rules.yaml\n\
-         \x20     --check          validate the rule file and exit\n\
+         \x20 -t, --check          check the rule file and exit, like nginx -t. Without --config it checks\n\
+         \x20                      {INSTALLED_RULES}; variables the rule file refers to that are not\n\
+         \x20                      in the environment are read from {INSTALLED_ENV_FILE}\n\
          \x20     --stdin          read logs from stdin (for rsyslog omprog, or to replay old logs against rules)\n\
          \x20 -V, --version        print the version and exit"
     );
@@ -97,20 +103,62 @@ fn load(path: &Path) -> Result<(Engine, Listen), String> {
     Ok((Engine::from_config(cfg)?, listen))
 }
 
+/// `httpdog -t`: would the service start with this rule file? The answer is the line to print.
+///
+/// The service gets the webhook URL and secret from systemd, which reads them from the secrets file. A shell
+/// has neither, so the file is read here too, the way systemd reads it. Without that every check of a rule
+/// file with a webhook would end in "environment variable ... is not set".
+///
+/// `env_file` is the path of that file. What is in it goes to the engine and nowhere else: the answer names
+/// variables and files, never a value.
+fn check(rules: &Path, env_file: &Path) -> Result<String, String> {
+    let (also, unread) = match fs::read_to_string(env_file) {
+        Ok(text) => (envfile::parse(&text), None),
+        Err(e) if e.kind() == ErrorKind::NotFound => (Vec::new(), None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
+    let checked = Config::load(rules).and_then(|cfg| Engine::from_config_with(cfg, &also));
+    match (checked, unread) {
+        (Ok(engine), _) => Ok(format!(
+            "OK: {}: {} rule(s)",
+            rules.display(),
+            engine.rule_count()
+        )),
+        // The likely reason for a missing variable, when the file that has it could not be opened
+        (Err(e), Some(why)) if e.contains("environment variable") => Err(format!(
+            "{}: {e} ({} could not be read: {why}. Run the check as root: sudo httpdog -t)",
+            rules.display(),
+            env_file.display()
+        )),
+        // "cannot read <file>: ..." names the file already
+        (Err(e), _) if e.starts_with("cannot read ") => Err(e),
+        (Err(e), _) => Err(format!("{}: {e}", rules.display())),
+    }
+}
+
 fn main() {
     let args = parse_args();
 
-    let (mut engine, listen) = match load(&args.config) {
+    if args.check {
+        let rules = args.config.unwrap_or_else(|| INSTALLED_RULES.into());
+        match check(&rules, Path::new(INSTALLED_ENV_FILE)) {
+            Ok(line) => eprintln!("{line}"),
+            Err(e) => {
+                eprintln!("config error: {e}");
+                exit(EXIT_CONFIG);
+            }
+        }
+        return;
+    }
+
+    let config = args.config.unwrap_or_else(|| "rules.yaml".into());
+    let (mut engine, listen) = match load(&config) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("config error: {e}");
             exit(EXIT_CONFIG);
         }
     };
-    if args.check {
-        eprintln!("OK: {} rule(s)", engine.rule_count());
-        return;
-    }
 
     // Signal handlers only set flags; the main loop does the real work
     let term = Arc::new(AtomicBool::new(false));
@@ -180,7 +228,7 @@ fn main() {
         }
         if hup.swap(false, Ordering::Relaxed) {
             // A bad new rule file keeps the old rules: monitoring must not stop because of a config mistake
-            match load(&args.config) {
+            match load(&config) {
                 // systemd holds the socket and passes the same one at every start, and httpdog does not start
                 // when `listen` names another. Taking these rules would leave a rule file that works until the
                 // next restart or reboot and then keeps httpdog down, so it is refused now, while someone is looking
@@ -523,6 +571,84 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn check_reads_the_secrets_file_the_service_gets() {
+        let dir = test_dir("check");
+        let rules = dir.join("rules.yaml");
+        let env_file = dir.join("secrets.env");
+        fs::write(
+            &rules,
+            "notifiers:\n  ops: { type: webhook, url_env: HD_CHECK_TEST_URL, secret_env: HD_CHECK_TEST_SECRET }\n\
+             rules:\n  - id: r\n    notify: [ops]\n    when: { field: status, op: eq, value: 500 }\n",
+        )
+        .unwrap();
+
+        // No secrets file: the same answer as before there was one to read
+        let err = check(&rules, &env_file).unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "{}: notifier \"ops\": environment variable HD_CHECK_TEST_URL is not set",
+                rules.display()
+            )
+        );
+
+        // One of the two is not enough, and the answer never shows a value
+        fs::write(
+            &env_file,
+            "HD_CHECK_TEST_URL='https://example.com/hook?a=1&b=2'\n",
+        )
+        .unwrap();
+        let err = check(&rules, &env_file).unwrap_err();
+        assert!(err.contains("HD_CHECK_TEST_SECRET is not set"), "{err}");
+        assert!(!err.contains("example.com"), "{err}");
+
+        fs::write(
+            &env_file,
+            "HD_CHECK_TEST_URL='https://example.com/hook?a=1&b=2'\nHD_CHECK_TEST_SECRET=0123abcd\n",
+        )
+        .unwrap();
+        let answer = check(&rules, &env_file).unwrap();
+        assert_eq!(answer, format!("OK: {}: 1 rule(s)", rules.display()));
+        // Whatever the outcome, the answer names variables and files and never shows a value from the file
+        let shows_a_value = |text: &str| text.contains("example.com") || text.contains("0123abcd");
+        assert!(!shows_a_value(&answer));
+        for broken in [
+            "rules: [",
+            "notifiers:\n  ops: { type: webhook, url_env: HD_CHECK_TEST_URL, secret_env: HD_CHECK_TEST_SECRET }\n\
+             rules:\n  - id: r\n    notify: [nobody]\n    when: { field: status, op: eq, value: 500 }\n",
+            "notifiers:\n  ops: { type: webhook, url_env: HD_CHECK_TEST_URL, secret_env: HD_CHECK_TEST_SECRET }\n\
+             rules:\n  - id: r\n    notify: [ops]\n    when: { field: status, op: regex, value: '(' }\n",
+            "notifiers:\n  ops: { type: webhook, url_env: HD_CHECK_TEST_URL, secret_env: HD_CHECK_TEST_SECRET, \
+             secret: both }\nrules: []\n",
+        ] {
+            let other = dir.join("broken.yaml");
+            fs::write(&other, broken).unwrap();
+            let refused = check(&other, &env_file).unwrap_err();
+            assert!(!shows_a_value(&refused));
+        }
+
+        // A secrets file that cannot be opened is named as the likely cause. Root opens it anyway, so the
+        // check only means something when the tests do not run as root
+        fs::set_permissions(&env_file, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&env_file).is_err() {
+            let err = check(&rules, &env_file).unwrap_err();
+            assert!(err.contains("HD_CHECK_TEST_URL is not set"), "{err}");
+            assert!(err.contains("could not be read"), "{err}");
+            assert!(err.contains("sudo httpdog -t"), "{err}");
+        }
+
+        // A mistake in the rule file itself is reported with the file's name
+        fs::write(&rules, "rules: [").unwrap();
+        let err = check(&rules, &env_file).unwrap_err();
+        assert!(err.starts_with(&format!("{}: ", rules.display())), "{err}");
+        assert!(!err.contains("could not be read"), "{err}");
+        let err = check(&dir.join("missing.yaml"), &env_file).unwrap_err();
+        assert!(err.starts_with("cannot read "), "{err}");
+        assert_eq!(err.matches("missing.yaml").count(), 1, "{err}");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

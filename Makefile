@@ -57,10 +57,9 @@ fmt: ## Format the code with rustfmt
 fmt-check: ## Check formatting without changing files
 	cargo fmt --check
 
-check-rules: build ## Check that rules.example.yaml and the rule files under examples/ pass --check
+check-rules: build ## Check that rules.example.yaml and the rule files under examples/ pass httpdog -t
 	@for f in $(RULE_FILES); do \
-		printf '%s: ' "$$f"; \
-		$(DUMMY_ENV) $(BIN) --check --config "$$f" 2>&1 || exit 1; \
+		$(DUMMY_ENV) $(BIN) -t --config "$$f" 2>&1 || exit 1; \
 	done
 
 smoke: build ## End-to-end smoke test: replay the JSON and combined sample logs and count ALERT lines

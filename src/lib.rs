@@ -7,5 +7,6 @@
 
 pub mod config;
 pub mod engine;
+pub mod envfile;
 pub mod format;
 pub mod notify;
