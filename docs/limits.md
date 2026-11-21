@@ -133,6 +133,21 @@ With the binary CI built, the checks of the two sections above were repeated as 
 - **On Rocky Linux 9.8** `sudo` does not look in `/usr/local/bin`: `sudo httpdog -t` ends with `command not found`, and `sudo /usr/local/bin/httpdog -t` works. The README says so.
 - **A site with its own `access_log`**: a `server { }` block with an `access_log` line of its own raised no alert, and one without raised one, with the snippet in `conf.d` in both cases (nginx 1.24.0).
 
+**The 0.3.0 release**
+
+Tested on 2026-11-21, right after the release, on the same four cloud servers (amd64, the distribution's own kernel, the default AppArmor or SELinux setting). Each server was first put back to a state without httpdog. Then the six steps of the README were typed as they are, downloads included: the binary and `SHA256SUMS` from the latest release, and the rule file, the two unit files and the nginx snippet from the `v0.3.0` tag.
+
+| Distribution | The install in the README | The socket held by systemd | After a reboot |
+|---|---|---|---|
+| Ubuntu 24.04 | 18 of 18 | 52 of 52 | 5 of 5 |
+| Debian 13 | 18 of 18 | 52 of 52 | 5 of 5 |
+| Rocky Linux 9.8, SELinux enforcing | 19 of 19 | 59 of 59 | 7 of 7 |
+| Fedora 44, SELinux enforcing | 19 of 19 | 59 of 59 | 7 of 7 |
+
+- **The release**: the downloaded binary matches `SHA256SUMS` and reports 0.3.0, and the same binary ran on all four servers; the four files the README fetches exist at the tag and are the ones of the repository, and so is the SELinux policy file, which the two SELinux servers installed from the tag. The signed build provenance of both release binaries was verified with `gh attestation verify` on the development machine: it names the build workflow at the `v0.3.0` tag, and a copy of a binary with one byte added is refused.
+- **The checks** are the ones of the three sections above: the install and `httpdog -t`, the socket held by systemd, and a reboot. The arm64 binary of the release ran the socket and reboot checks in the local Ubuntu 24.04 machine, 57 of 57.
+- Fedora and Rocky Linux have no `dpkg`, which step 1 uses to pick the architecture, so `ARCH=amd64` was set by hand there.
+
 **The 0.2.0 release on cloud servers**
 
 Tested on 2026-11-16 on freshly installed servers at a cloud provider. Each is an amd64 KVM virtual machine running the distribution's own kernel, with the distribution's default AppArmor or SELinux setting left as it was. httpdog was installed by following the README, with the amd64 binary of the 0.2.0 release and the files of the `v0.2.0` tag.
@@ -227,7 +242,7 @@ The memory ceiling of the unit file was tested the same day in an OrbStack machi
 **Not verified**
 
 - The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
-- The socket held by systemd on arm64 with a distribution's own kernel, on Debian 12 and Ubuntu 22.04 outside local virtual machines, and the 0.3.0 release itself: the runs above were made before it existed, with builds of the same source, the last of them by CI.
+- The socket held by systemd on arm64 with a distribution's own kernel, on Debian 12 and Ubuntu 22.04 outside local virtual machines, and the arm64 binary of the 0.3.0 release under a distribution's own kernel.
 - SELinux enforcing with a socket path other than the default, and with Apache.
 - The 0.2.1 release under systemd on Debian and Ubuntu, and on arm64.
 - amd64 outside a virtual machine.
