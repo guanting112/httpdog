@@ -83,7 +83,7 @@ On Debian 11 the nginx packages could not be downloaded that day (the security m
 
 **The socket held by systemd**
 
-Added after 0.2.3 and tested on 2026-11-21 in local virtual machines (arm64, sharing the host's kernel, so no SELinux enforcing; the next section has that), with `deploy/httpdog.socket` and `deploy/httpdog.service` installed the way the README says and nginx running 4 workers. The binary was a static arm64 build of the working tree, made with the same musl target CI uses; the Ubuntu 24.04 machine was run once more with the arm64 binary CI built for the commit, with the same result. From here on, what the sections above say about a restart making a new socket describes the versions they tested.
+Added in 0.3.0 and tested on 2026-11-21, before the release, in local virtual machines (arm64, sharing the host's kernel, so no SELinux enforcing; the next section has that), with `deploy/httpdog.socket` and `deploy/httpdog.service` installed the way the README says and nginx running 4 workers. The binary was a static arm64 build of the working tree, made with the same musl target CI uses; the Ubuntu 24.04 machine was run once more with the arm64 binary CI built for the commit, with the same result. From here on, what the sections above say about a restart making a new socket describes the versions they tested.
 
 | Distribution | systemd | nginx | Checks passed |
 |---|---|---|---|
@@ -122,7 +122,7 @@ Tested on 2026-11-21 on freshly installed servers at a cloud provider: amd64 KVM
 
 **The install in the README, and `httpdog -t`**
 
-Tested on 2026-11-21 on the same four cloud servers, first with a static amd64 build of the working tree and then with the amd64 binary CI built for the commit, checked against the checksum CI published with it. Each server was first put back to a state without httpdog, then the six steps of the README were followed as written, except that the files of steps 1 and 2 were copied to the server, since no release carries them yet. 15 checks, all passed both times on Ubuntu 24.04, Debian 13, Rocky Linux 9.8 and Fedora 44.
+Tested on 2026-11-21 on the same four cloud servers, first with a static amd64 build of the working tree and then with the amd64 binary CI built for the commit, checked against the checksum CI published with it. Each server was first put back to a state without httpdog, then the six steps of the README were followed as written, except that the files of steps 1 and 2 were copied to the server, because 0.3.0 had not been released yet. 15 checks, all passed both times on Ubuntu 24.04, Debian 13, Rocky Linux 9.8 and Fedora 44.
 
 With the binary CI built, the checks of the two sections above were repeated as well, a reboot of each server included: 57 on Ubuntu 24.04 and Debian 13, 66 on Rocky Linux 9.8 and Fedora 44, and 57 in the local Ubuntu 24.04 machine with the arm64 binary. One check failed once on Ubuntu 24.04, the one about a group that does not exist; it passed in six repeats and in a second full run, so it is taken for a matter of timing in the test and not of httpdog.
 
@@ -227,7 +227,7 @@ The memory ceiling of the unit file was tested the same day in an OrbStack machi
 **Not verified**
 
 - The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
-- The socket held by systemd on arm64 with a distribution's own kernel, on Debian 12 and Ubuntu 22.04 outside local virtual machines, and with a released binary (no release carries it yet).
+- The socket held by systemd on arm64 with a distribution's own kernel, on Debian 12 and Ubuntu 22.04 outside local virtual machines, and the 0.3.0 release itself: the runs above were made before it existed, with builds of the same source, the last of them by CI.
 - SELinux enforcing with a socket path other than the default, and with Apache.
 - The 0.2.1 release under systemd on Debian and Ubuntu, and on arm64.
 - amd64 outside a virtual machine.
