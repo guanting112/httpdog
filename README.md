@@ -122,7 +122,7 @@ ALERT [httpdog] sensitive-file-probe | 127.0.0.1 tried to access /.env (status 4
 
 Notes:
 
-- To install a specific version instead of the latest, replace `latest/download` with `download/v0.2.3` in both URLs of step 1.
+- To install a specific version instead of the latest, replace `latest/download` with `download/v0.3.0` in both URLs of step 1.
 - `SHA256SUMS` only catches a corrupted download, because it sits next to the binaries. To prove that a binary was built by this repository's workflow, verify its signed build provenance. Each release carries it as `httpdog.sigstore.json`, so `gh` needs no GitHub login:
 
   ```bash
@@ -398,7 +398,7 @@ httpdog [--config rules.yaml] [-t] [--stdin] [--version]
                        /etc/httpdog/rules.yaml; variables the rule file refers to that are not
                        in the environment are read from /etc/httpdog/secrets.env
       --stdin          read logs from stdin instead of listening on a socket
-  -V, --version        print the version (e.g. httpdog 0.2.3) and exit
+  -V, --version        print the version (e.g. httpdog 0.3.0) and exit
 ```
 
 `--stdin` has two uses:

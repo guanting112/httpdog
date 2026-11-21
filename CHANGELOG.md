@@ -4,7 +4,9 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
-Restarting httpdog no longer loses log lines. This changes how httpdog is installed under systemd: there are now two unit files, and an existing install has to be upgraded by hand, see below.
+## [0.3.0] - 2026-11-21
+
+Restarting httpdog no longer loses log lines, and `sudo httpdog -t` checks the rule file the way `nginx -t` checks nginx's configuration. The first of these changes how httpdog is installed under systemd: there are now two unit files, and an existing install has to be upgraded by hand, see "Two unit files in place of one" below.
 
 ### Added
 
@@ -128,7 +130,8 @@ First release.
 - There is no built-in file-reading mode; reading a log file needs `tail -F` piped into `--stdin`.
 - Verified under systemd with real nginx and Apache on Ubuntu 22.04 to 26.04, Debian 11 to 13, Fedora 44 and Rocky Linux 10, but not yet under production traffic. See `docs/limits.md` for the full list and the verification status.
 
-[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/guanting112/httpdog/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/guanting112/httpdog/releases/tag/v0.3.0
 [0.2.3]: https://github.com/guanting112/httpdog/releases/tag/v0.2.3
 [0.2.2]: https://github.com/guanting112/httpdog/releases/tag/v0.2.2
 [0.2.1]: https://github.com/guanting112/httpdog/releases/tag/v0.2.1
