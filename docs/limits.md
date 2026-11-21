@@ -15,7 +15,7 @@ httpdog is kept simple on purpose. These are the current trade-offs.
 
 - **Logs are dropped when traffic exceeds the processing rate**: at most 8192 lines wait to be processed, and new lines are dropped once that is full, so memory cannot grow without bound. Dropped lines are not matched against rules, so threshold counts are too low for that period. To be notified when it happens, see [overload](rules.md#overload-alerts-when-falling-behind).
 - **httpdog believes every line it receives.** It cannot tell a line the web server wrote from one another program made up. The default unix socket narrows the senders to root and the web server's group, which still includes a web application running under the web server's account. With a UDP `listen`, anything that can reach the address can send. See [How logs reach httpdog](log-format.md#how-logs-reach-httpdog).
-- **Restarting httpdog alone loses one line per nginx worker.** The restart creates a new socket; each worker notices on its next log line, which is lost, and reconnects for the one after. Reloading nginx right after the restart avoids it. Lines sent while httpdog is down are lost either way.
+- **Lines wait for a restarting httpdog only up to a point.** systemd holds the socket, so a restart loses nothing by itself and nginx needs no reload. But the socket holds a few hundred lines: 512 at most (the kernel's `net.unix.max_dgram_qlen`), and each nginx worker can have only about 100 to 180 waiting, depending on their length. What arrives beyond that while httpdog is away is dropped without a trace. Lines httpdog had already taken off the socket when it was killed are lost too. Restarting `httpdog.socket` itself, or running httpdog without it, still makes a new socket and costs one line per nginx worker unless nginx is reloaded.
 - **syslog is sent as datagrams** (over the unix socket, or UDP): nginx's syslog output does not support TCP. A very long request may be truncated, and the truncated JSON line fails to parse and is skipped. Datagrams may also be lost at traffic peaks.
 - **Only the `json` and `combined` log formats are supported.** Custom non-JSON formats and Apache's `vhost_combined` (which starts with the site name) are not.
 - **There is no built-in file-reading mode.** Reading a log file needs `tail -F` piped into `--stdin`, and that setup has no matching systemd unit yet.
@@ -80,6 +80,45 @@ On Debian 11 the nginx packages could not be downloaded that day (the security m
 - **Restarts**: a reload keeps the socket's group; after `systemctl restart` and after `SIGKILL` the new socket is handed to the group again; restart plus an nginx reload loses nothing (30 of 30 requests); a restart alone loses at most one line per worker (3 of 60 with 3 workers).
 - **UDP**: works with the unit file unchanged; prints the warning for a loopback address and the stronger one for `0.0.0.0`; `nobody` can send a line that raises an alert, which is what the warning is about.
 - **Mistakes**: a reload with a changed `listen` says it is not applied; a socket path without `unix:` ends with exit status 78 and is not restarted; a wrong group in the unit file fails with `chgrp: invalid group`.
+
+**The socket held by systemd**
+
+Added after 0.2.3 and tested on 2026-11-21 in local virtual machines (arm64, sharing the host's kernel, so no SELinux enforcing; the next section has that), with `deploy/httpdog.socket` and `deploy/httpdog.service` installed the way the README says and nginx running 4 workers. The binary was a static arm64 build of the working tree, made with the same musl target CI uses, not a binary built by CI. From here on, what the sections above say about a restart making a new socket describes the versions they tested.
+
+| Distribution | systemd | nginx | Checks passed |
+|---|---|---|---|
+| Ubuntu 22.04 | 249 | 1.18.0 | 57 of 57 |
+| Ubuntu 24.04 | 255 | 1.24.0 | 57 of 57 |
+| Debian 12 | 252 | 1.22.1 | 57 of 57 |
+| Debian 13 | 257 | 1.26.3 | 57 of 57 |
+| Rocky Linux 10 (group `nginx`) | 257 | 1.26.3 | 57 of 57 |
+
+- **The socket**: `enable --now httpdog` enables and starts both units; the socket file belongs to root and the web server's group with mode `0660`, in a directory that is root's; httpdog says the socket is held by systemd, does not run as root, and is not in that group; as its own user, inside the file system it sees, it can neither remove the socket file nor create one next to it, nor send to the socket by its path.
+- **Who can send**: `nobody` is refused and raises nothing; the web server's account and root can send; a real request through nginx raises an alert.
+- **Restarts**: after `systemctl restart` with no nginx reload, 200 of 200 requests raise an alert, the socket is the same one and nginx reports no error; after `SIGKILL`, the 100 requests sent before systemd restarted it all raise an alert; a reload keeps the socket; a reload that changes `listen` is refused and the old rules keep matching, and with `listen` put back the same file is taken; a process frozen with `SIGSTOP` is restarted by the watchdog after 31 to 32 seconds on the same socket, and of 300 requests sent meanwhile 259 to 300 raised an alert (the rest were either more than one nginx worker may have waiting, or had been taken off the socket by the process that was killed; the runs do not tell the two apart).
+- **How much waits**: with httpdog frozen and 1500 requests sent, 513 raised an alert once it continued, with `net.unix.max_dgram_qlen` at 512; in one run it was 415, when the requests were spread unevenly over the 4 workers. nginx kept serving and reported nothing for the rest. Measured separately on an unread socket: one sender can have 180 datagrams of 300 or 400 bytes waiting, or 100 of 1000 bytes.
+- **Stopping**: stopping httpdog alone makes systemd warn, and the next line starts it again and is matched; stopping both removes the socket file, and nothing starts httpdog; `systemctl start httpdog` brings both back.
+- **A broken rule file**: exit status 78 and no restart while nothing arrives, with the socket still there; arriving lines cause 5 starts in all, then the socket unit fails with `service-start-limit-hit` and the socket file is gone; after the fix `systemctl start httpdog` brings both back, except within the same 10 seconds, where it needs `systemctl reset-failed httpdog` first.
+- **The unit file and the rule file disagree**: another path in `listen`, a UDP `listen` with the unix socket, and `ListenStream=` in place of `ListenDatagram=` each end with exit status 78 and a message that says what was passed. With the UDP address in both, httpdog takes the UDP socket from systemd, prints the warning at every start, and `nobody` can send.
+- **The group**: a group that does not exist fails the socket unit with `Failed to resolve group`; changing `SocketGroup=`, then `daemon-reload` and a restart of `httpdog.socket`, applies it, and the web server's account is then refused.
+- **Old and new**: `httpdog.service` without `httpdog.socket` is refused by systemd by name; the 0.2.3 binary under the new unit files fails with the message the README lists; an install of 0.2.3 as released, upgraded in the order the changelog gives, ends with both units enabled, the socket in a directory that is root's, and no line lost on the next restart.
+- **After a reboot**: both units and nginx are active, the socket exists before nginx starts, and 20 of 20 requests raise an alert with nothing reloaded.
+
+**The socket held by systemd, on cloud servers**
+
+Tested on 2026-11-21 on freshly installed servers at a cloud provider: amd64 KVM virtual machines with one CPU, each running the distribution's own kernel, with the default AppArmor or SELinux setting left as it was. The checks are the ones of the section above, plus the SELinux ones on the two distributions that enforce it. The binary was a static amd64 build of the working tree, made on one of the servers with the command CI uses, not a binary built by CI; the test suite, including the tests that pass the socket the way systemd does, passed there first.
+
+| Distribution | Kernel | systemd | nginx | Enforcing | Checks passed |
+|---|---|---|---|---|---|
+| Ubuntu 24.04 | 6.8.0-149 | 255 | 1.24.0 | AppArmor | 57 of 57 |
+| Debian 13 | 6.12.113 | 257 | 1.26.3 | AppArmor | 57 of 57 |
+| Rocky Linux 9.8 (group `nginx`) | 5.14.0-687 | 252 | 1.20.1 | SELinux | 66 of 66 |
+| Fedora 44 (group `nginx`) | 7.2.13 | 259 | 1.30.7 | SELinux | 66 of 66 |
+
+- **SELinux enforcing**: the socket systemd creates has the same labels as the one httpdog used to create, so `deploy/httpdog-selinux.cil` is unchanged. The socket file is `httpd_var_run_t` and httpdog runs as `unconfined_service_t`, both also after a reboot. Without the policy file nginx is denied and nothing raises an alert: the denial is `sendto` from `httpd_t` to a `unix_dgram_socket` of `unconfined_service_t`, the one thing the file allows, and nginx's error log shows `connect() failed (13: Permission denied)`. With the file installed requests raise alerts, and the rest of the run and the reboot produced no denial about httpdog or nginx.
+- **After a reboot** of each server: both units and nginx are active, the socket exists before nginx starts, and 20 of 20 requests raise an alert with nothing reloaded.
+- **How much waits**: 513 of 1500 on three of the servers. On Rocky Linux 9.8, where nginx gave every request to the same worker, 167, and 167 of the 300 sent while the watchdog was waiting; on the other three all 300.
+- **Messages that differ between versions**: nginx 1.20 reports the SELinux denial without `while logging to syslog`; systemd 259 puts the group in quotes, `Failed to resolve group 'nosuchgroup'`.
 
 **The 0.2.0 release on cloud servers**
 
@@ -175,6 +214,7 @@ The memory ceiling of the unit file was tested the same day in an OrbStack machi
 **Not verified**
 
 - The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
+- The socket held by systemd with a binary built by CI, on arm64 with a distribution's own kernel, and on Debian 12 and Ubuntu 22.04 outside local virtual machines.
 - SELinux enforcing with a socket path other than the default, and with Apache.
 - The 0.2.1 release under systemd on Debian and Ubuntu, and on arm64.
 - amd64 outside a virtual machine.

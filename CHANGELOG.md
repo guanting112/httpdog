@@ -4,8 +4,32 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+Restarting httpdog no longer loses log lines. This changes how httpdog is installed under systemd: there are now two unit files, and an existing install has to be upgraded by hand, see below.
+
+### Fixed
+
+- A restart of httpdog lost one log line for every nginx worker, and every line sent while it was down. httpdog created its socket itself, so each restart made a new one: nginx's workers were still connected to the old one, and each found out by losing its next line. Unless nginx was reloaded right after, a probe that happened to be a worker's first request after the restart raised no alert. Now systemd creates the socket and holds it (`deploy/httpdog.socket`), and passes it to httpdog at every start. A restart keeps the same socket, nginx needs no reload, and the lines sent in the meantime wait in the socket until httpdog is back: a few hundred fit, 512 at most. This covers `systemctl restart`, a crash, the watchdog and the memory ceiling.
+
 ### Changed
 
+- **Two unit files in place of one.** `deploy/httpdog.socket` is new and describes the socket: its path, its mode (`0660`) and its group. `deploy/httpdog.service` no longer creates the directory or hands the socket to the web server's group, and needs `httpdog.socket`. Who can send logs is unchanged, root and the web server's group, and httpdog is still not a member of that group; it now cannot remove or replace the socket file either, which belongs to root. To upgrade an install of 0.2.x:
+
+  ```bash
+  sudo systemctl stop httpdog            # While the old unit file is still loaded: it removes the old socket
+  # Install the new binary (step 1 of the README), fetch the two unit files (step 2), then:
+  sudo install -m 644 httpdog.service httpdog.socket /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now httpdog    # Enables and starts httpdog.socket too
+  sudo systemctl reload nginx            # One last time
+  ```
+
+  The new binary also runs under the old unit file, behaving as before. The new unit files need the new binary: an older one fails with `a socket is already there and cannot be checked`.
+- **The group is set in `httpdog.socket`.** If you changed `www-data` in `httpdog.service` (to `nginx` on Fedora or Rocky Linux), make the same change to `SocketGroup=` in `httpdog.socket`.
+- **With a `listen` other than the default, the address goes in `httpdog.socket` as well.** httpdog checks that the socket systemd passed is the one `listen` names and does not start when they differ (exit status 78), because it would otherwise run and receive nothing. For UDP, write `ListenDatagram=127.0.0.1:5514` in `httpdog.socket`. With the default socket there is nothing to do. For the same reason a reload refuses a rule file whose `listen` differs from the socket systemd holds, and keeps the old rules: taking it would leave a rule file that works until the next restart or reboot and then keeps httpdog down.
+- **Stopping httpdog alone does not keep it stopped.** The socket stays with systemd, and the next log line starts httpdog again. Use `sudo systemctl stop httpdog.socket httpdog`.
+- **After a rule file error at startup** (exit status 78), systemd tries a few more times when a log line arrives and then stops `httpdog.socket` too. Fix the file, then `sudo systemctl start httpdog && sudo systemctl reload nginx`.
+- httpdog started without systemd, or without `httpdog.socket`, creates its socket itself as before.
+- A new dependency, `sd-listen-fds` (142 lines, no dependencies of its own), takes the socket systemd passes. That step needs `unsafe` in Rust, which httpdog's own code still forbids.
 - Every release also carries its build provenance as `httpdog.intoto.jsonl`, the same content as `httpdog.sigstore.json` under the name OpenSSF Scorecard looks for. The file was added to the five releases already published; their binaries and other files are unchanged.
 
 ### Documentation

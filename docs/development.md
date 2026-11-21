@@ -50,7 +50,8 @@ Receiving logs, matching and sending notifications are independent: slow notific
 | `src/format.rs` | Parses a log line into fields: `json` and `combined` |
 | `src/notify.rs` | Notifier thread, webhook body, signature and retries |
 | `src/main.rs` | Arguments, signals, socket / stdin input, main loop, systemd notification |
-| `deploy/` | systemd unit, nginx config snippet, and the SELinux policy for systems where it is enforcing |
+| `deploy/` | The two systemd units (`httpdog.socket` holds the socket logs arrive on, `httpdog.service` runs the program), nginx config snippet, and the SELinux policy for systems where it is enforcing |
+| `tests/` | Starts the built binary the way systemd does, with the socket passed in, and checks that a restart keeps it (Linux only) |
 | `examples/` | The `combined` starter rules and 5 scenario templates |
 | `fuzz/` | Fuzz targets and the script that runs them |
 | `sample.log`, `sample.combined.log` | Sample logs for the smoke tests (one JSON, one `combined`) |
