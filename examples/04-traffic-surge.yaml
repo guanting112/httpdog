@@ -1,17 +1,5 @@
-# Scenario 4: traffic anomalies
-#
-# For: finding out who is behind a sudden traffic surge and where it lands. It catches site-wide peaks, one IP flooding,
-# one endpoint being hammered, crawlers and scripts, and abnormally large responses.
-#
-# Fields needed: remote_addr, request_uri, body_bytes_sent, http_user_agent
-# (request_path is request_uri without the query string; httpdog adds it)
-#
-# Tuning notes:
-#   - These thresholds need the most tuning per site. Estimate your normal requests per 10 seconds from journalctl
-#     or an existing access log, and set traffic-surge to 3 to 5 times the peak.
-#   - Under really heavy traffic httpdog itself may fall behind, so this file also turns on overload:
-#     dropped logs raise a separate alert, telling you the counts for that period are too low.
-#   - These rules only notify; they do not block traffic. To block, use nginx's limit_req / limit_conn or a CDN.
+# Scenario 4: traffic anomalies. Set the thresholds against your normal traffic.
+# Docs: https://github.com/guanting112/httpdog/blob/main/docs/rules.md#using-the-rule-templates
 
 notifiers:
   console:
@@ -26,8 +14,7 @@ overload:
   cooldown: 5m
 
 rules:
-  # Site-wide traffic peak: more than 5000 requests in 10 seconds.
-  # exists as the condition means every line counts, because every log line has remote_addr
+  # exists on remote_addr matches every line
   - id: traffic-surge
     when: { field: remote_addr, op: exists }
     threshold: { count: 5000, window: 10s }
@@ -35,7 +22,6 @@ rules:
     notify: [ops]
     message: "Site-wide traffic surge, latest: {host}{request_path}"
 
-  # One IP flooding: more than 300 requests in 10 seconds
   - id: single-ip-flood
     when: { field: remote_addr, op: exists }
     group_by: remote_addr
@@ -44,7 +30,6 @@ rules:
     notify: [ops]
     message: "{remote_addr} abnormal request volume, latest: {request_path}"
 
-  # One endpoint being hammered: when many IPs hit the same path the rule above misses it, so this groups by path
   - id: hot-endpoint
     when: { field: request_path, op: exists }
     group_by: request_path
@@ -53,8 +38,7 @@ rules:
     notify: [console]
     message: "{host}{request_path} is being hammered"
 
-  # Expensive endpoints (search, export) called over and over by one IP. A few requests to these can bring the backend down,
-  # so the threshold is far below normal traffic. Use the resource-hungry paths of your own site
+  # Use your own resource-hungry paths
   - id: expensive-endpoint-abuse
     when:
       any:
@@ -66,7 +50,6 @@ rules:
     notify: [console, ops]
     message: "{remote_addr} is calling {request_path} heavily"
 
-  # The default User-Agent of scripts and libraries, in volume. A little is normal (monitoring, partner integrations)
   - id: scripted-client-flood
     when:
       field: http_user_agent
@@ -78,7 +61,6 @@ rules:
     notify: [console]
     message: "{remote_addr} many scripted requests: {http_user_agent}"
 
-  # Many requests with no User-Agent. Both the empty string and "-" are listed, to cover both log_format styles
   - id: empty-user-agent
     when: { field: http_user_agent, op: in, value: ["", "-"] }
     group_by: remote_addr
@@ -87,7 +69,7 @@ rules:
     notify: [console]
     message: "{remote_addr} many requests with no User-Agent, latest: {request_path}"
 
-  # A single response over 100 MB: someone may be bulk downloading, or an API forgot to paginate
+  # A single response over 100 MB
   - id: large-response
     when: { field: body_bytes_sent, op: gt, value: 104857600 }
     group_by: remote_addr

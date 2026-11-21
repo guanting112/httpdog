@@ -181,11 +181,22 @@ The one thing that cannot be checked is a field name under `format: json`: a typ
 
 ## Using the rule templates
 
-The 6 templates under `examples/` are listed in the [README](../README.md#ready-made-rule-templates). `00` is a starter for the `combined` format; `01` to `05` are organized by scenario and assume the JSON format. Before using them:
+The 7 templates under `examples/` are listed in the [README](../README.md#ready-made-rule-templates). `00` is a starter for the `combined` format; `01` to `06` are organized by scenario and assume the JSON format. The files carry few comments; what to know about each is here. Before using them:
 
 - **Thresholds and paths are placeholders.** Set thresholds against your site's normal traffic and replace the paths (`/login`, `/checkout`, `/admin` and so on) with the real ones. Replay a recent access log with `--stdin` first and see how often they fire before going live.
 - **To combine several files**, concatenate their `rules` lists into one rule file and keep a single `notifiers` section. Rule `id`s must be unique.
-- **`01` to `05` all refer to `HTTPDOG_WEBHOOK_URL` and `HTTPDOG_WEBHOOK_SECRET`**; set both environment variables before checking the rule file. `00` only writes to the system log and needs neither.
-- **`01` to `05` only use fields from `deploy/nginx-snippet.conf`**, so they work once nginx is set up that way.
-- **`01` to `05` also work with `combined`**: add a `format: combined` line at the top of the file. `01`, `02` and `04` work as they are. `host-5xx`, `slow-request` and `slow-burst` in `03` and `payment-callback-slow` in `05` use fields `combined` does not have and fail at load time, so delete those rules first. `{host}` and `{request_time}` in messages show as `-`.
+- **`01` to `06` all refer to `HTTPDOG_WEBHOOK_URL` and `HTTPDOG_WEBHOOK_SECRET`**; set both environment variables before checking the rule file. `00` only writes to the system log and needs neither.
+- **`01` to `06` only use fields from `deploy/nginx-snippet.conf`**, so they work once nginx is set up that way.
+- **`01` to `06` also work with `combined`**: add a `format: combined` line at the top of the file. `01`, `02`, `04` and `06` work as they are. `host-5xx`, `slow-request` and `slow-burst` in `03` and `payment-callback-slow` in `05` use fields `combined` does not have and fail at load time, so delete those rules first. `{host}` and `{request_time}` in messages show as `-`.
 - **The templates match paths with `request_path`**, the path the client asked for, so they work on a site with a front controller (`try_files ... /index.php`) or custom error pages. The one exception is `sensitive-file-exposed`, which matches `uri`, the file nginx actually served; see [log-format.md](log-format.md#things-to-watch-out-for) for the difference.
+
+What to change in each file:
+
+| File | Before using it |
+|---|---|
+| `01-security-probe.yaml` | Public sites are scanned every day, so every rule but `sensitive-file-exposed` only writes to the system log. Behind a CDN or reverse proxy, set up nginx's `real_ip` first, or `remote_addr` is always the proxy. The regexes are heuristics: they tell you someone is trying, they do not block anything |
+| `02-auth-abuse.yaml` | Replace the paths (`/login`, `/password/reset`, `/signup`, `/api/`). The login rules assume a failed login answers 401 or 403. If yours answers 200 or redirects with 302, the access log cannot tell failure from success: remove the `status` condition and raise the threshold. `credential-stuffing` counts site-wide; set it above the failures of a normal peak hour |
+| `03-site-health.yaml` | Set the thresholds against your traffic; on a quiet site lower `count`. `request_time` includes sending the response to a slow client, so exclude download paths the way `slow-request` excludes `/export/`. Delete `host-5xx` on a single site, and point `healthcheck-failing` at the path your monitoring really calls |
+| `04-traffic-surge.yaml` | These thresholds need the most tuning: set `traffic-surge` to 3 to 5 times your peak. The file turns on `overload`, because under a real flood httpdog may drop lines and the counts come out low. The rules only notify; to block, use nginx's `limit_req` or a CDN |
+| `05-critical-endpoints.yaml` | Replace every path, and the allow list in `admin-unknown-source` with the addresses of your office or VPN. There is no CIDR matching; for a subnet use `prefix` (`10.` or `192.168.1.`) |
+| `06-private-data.yaml` | Replace the upload paths (`/uploads`, `/storage`, `/files`, `/media`), the record paths, the admin paths and the file types. The two bulk-view rules count per address: when the whole office shares one, set the thresholds above a normal working day. The access log has no user name, so these rules see addresses, not accounts |

@@ -21,6 +21,8 @@
 
 - 有人在掃 `/.env`、`/.git/config` 這類敏感檔案
 - 同一個 IP 一分鐘內登入失敗 20 次
+- 有人在猜使用者上傳的檔案:證件、PDF、試算表
+- 同一個 IP 在後台大量翻看會員資料或訂單
 - 網站突然大量回 5xx,或某些頁面變得很慢
 
 你把「什麼情況要通知」寫成規則檔,httpdog 一筆一筆比對 nginx / Apache 送來的 log,符合就發通知。
@@ -272,7 +274,7 @@ rules:
 
 ### 現成的規則範本
 
-`examples/` 下有 6 份規則檔,每份都是可以直接載入的完整設定,開頭的註解寫了適用對象與套用前要改的地方。
+`examples/` 下有 7 份規則檔,每份都是可以直接載入的完整設定。
 
 | 檔案 | 情境 | 抓什麼 |
 |---|---|---|
@@ -282,8 +284,33 @@ rules:
 | `03-site-health.yaml` | 站台健康 | 5xx 暴增、後端無回應、單站錯誤偏高、慢請求、健康檢查失敗、用戶端提早斷線 |
 | `04-traffic-surge.yaml` | 流量異常 | 整站尖峰、單一 IP 灌流量、單一端點被集中打、腳本與爬蟲、超大回應 |
 | `05-critical-endpoints.yaml` | 關鍵業務路徑 | 結帳出錯、金流回呼失敗或過慢、未知來源進後台、後台刪除操作、API 用戶端錯誤暴增 |
+| `06-private-data.yaml` | 機密檔案與客戶資料 | 猜使用者上傳的檔案(證件、合約、試算表)、大量下載文件、逐一嘗試資料編號、同一個 IP 在後台大量查看會員或訂單、後台的每一次匯出 |
 
-範本裡的門檻與路徑都是示意,要換成你站台實際的數字與路徑。套用前的注意事項見 [docs/rules.md](docs/rules.md#using-the-rule-templates)。
+範本裡的門檻與路徑都是示意,要換成你站台實際的數字與路徑。每份要改什麼見 [docs/rules.md](docs/rules.md#using-the-rule-templates)。
+
+### 讓 coding agent 幫你寫
+
+哪些路徑值得盯,每個站台都不一樣,而答案都在你專案的程式碼裡。Claude Code、OpenAI Codex 這類 coding agent 讀得到:在你的專案裡打開它,請它根據專案的內容產生規則。
+
+![三個步驟:在你的專案裡請 coding agent 寫 httpdog 規則;它讀路由與上傳路徑,寫出用專案實際路徑的 rules.yaml;放到主機上用 sudo httpdog -t 檢查](docs/rules-with-agent.zh-TW.png)
+
+可以從這段提示開始:
+
+```text
+幫這個專案寫一份 httpdog 的規則檔,存成 rules.yaml。
+
+規則的寫法:
+https://raw.githubusercontent.com/guanting112/httpdog/main/docs/rules.md
+https://raw.githubusercontent.com/guanting112/httpdog/main/docs/log-format.md
+範例:https://github.com/guanting112/httpdog/tree/main/examples
+
+先讀這個專案的路由、上傳檔案的路徑與後台頁面,再針對這裡值得告警的事寫規則:
+有人在猜使用者上傳的檔案、在後台大量查看或匯出會員與訂單、登入被濫用、
+跟營收有關的路徑出錯。access log 是 httpdog 的 JSON 格式。路徑要用這個專案實際的路徑,
+用 request_path 比對,並列出哪些門檻是你猜的。
+```
+
+把結果放到 `/etc/httpdog/rules.yaml`,先跑 `sudo httpdog -t`,再 `sudo systemctl reload httpdog`。門檻是 agent 猜的,要依你實際的流量調整。
 
 ## 4. 接收通知
 

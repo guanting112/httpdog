@@ -1,17 +1,5 @@
 # Scenario 1: security probing
-#
-# For: any public-facing site. It catches signs that someone is looking for holes: scans for sensitive files,
-# directory traversal, SQL injection probes, scanning tools, bursts of 404s.
-#
-# Fields needed: remote_addr, uri, request_uri, status, http_user_agent
-# (request_path is request_uri without the query string; httpdog adds it)
-# (all in the log_format of deploy/nginx-snippet.conf)
-#
-# Tuning notes:
-#   - Public sites get scanned every day. These alerts are frequent and mostly need no action, so by default they only go to console (journald).
-#     The only one sent to the webhook is sensitive-file-exposed: a sensitive file really was read, and that always needs action.
-#   - Behind a CDN / reverse proxy, set up nginx's real_ip first, or remote_addr is always the proxy's IP.
-#   - The regexes are heuristics with misses and false positives. They tell you someone is trying; they do not block attacks.
+# Docs: https://github.com/guanting112/httpdog/blob/main/docs/rules.md#using-the-rule-templates
 
 notifiers:
   console:
@@ -22,10 +10,7 @@ notifiers:
     secret_env: HTTPDOG_WEBHOOK_SECRET
 
 rules:
-  # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked.
-  # It matches uri, the file nginx actually served: a request nginx answered with something else (the index.html
-  # of a single-page app, say) does not count, and an encoded path such as /%2eenv still does.
-  # Grouped by uri: one notification per file per hour, each file notified separately.
+  # A sensitive file was served, not just asked for. Matches uri on purpose
   - id: sensitive-file-exposed
     when:
       all:
@@ -41,9 +26,6 @@ rules:
     notify: [console, ops]
     message: "Sensitive file read: {host}{uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
 
-  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes.
-  # It matches request_path, the path that was asked for, so it still fires when the answer is an error page
-  # (with error_page 404 /404.html, uri would be /404.html). Keep this list the same as the one above
   - id: sensitive-file-probe
     when:
       any:
@@ -57,7 +39,6 @@ rules:
     notify: [console]
     message: "{remote_addr} tried to access {request_path} (status {status})"
 
-  # Directory traversal. Match request_uri: uri is the path after nginx normalizes it, with ../ already resolved
   - id: path-traversal
     when:
       field: request_uri
@@ -68,7 +49,6 @@ rules:
     notify: [console]
     message: "{remote_addr} possible directory traversal: {request_uri} (status {status})"
 
-  # SQL injection probes. request_uri again, because the parameters are in the query string
   - id: sqli-probe
     when:
       field: request_uri
@@ -79,7 +59,6 @@ rules:
     notify: [console]
     message: "{remote_addr} possible SQL injection: {request_uri} (status {status})"
 
-  # User-Agent of known scanning tools. A serious attacker changes it, so this only catches the laziest ones
   - id: scanner-user-agent
     when:
       field: http_user_agent
@@ -90,7 +69,6 @@ rules:
     notify: [console]
     message: "{remote_addr} is using a scanning tool: {http_user_agent}"
 
-  # Many 404s from one IP in a short time, usually brute-force path guessing
   - id: not-found-scan
     when: { field: status, op: eq, value: 404 }
     group_by: remote_addr

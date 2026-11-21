@@ -4,6 +4,15 @@ Notable changes in each version. The release workflow uses the section for a ver
 
 ## [Unreleased]
 
+### Added
+
+- A seventh rule template, `examples/06-private-data.yaml`, for private files and customer data: guessing the names of uploaded files (ID scans, contracts, spreadsheets), bulk downloads of documents, walking through record numbers, one address opening member records or orders in the admin area in bulk, and every export from the admin area.
+- The README shows how to have a coding agent (Claude Code, OpenAI Codex) write the rules from your project's code, with a prompt to start from.
+
+### Changed
+
+- `rules.example.yaml` and the templates under `examples/` carry far fewer comments, so they are easier to edit. What the comments explained is in `docs/rules.md`, which each file links to; what to change in each template is in a table under "Using the rule templates".
+
 ## [0.3.0] - 2026-11-21
 
 Restarting httpdog no longer loses log lines, and `sudo httpdog -t` checks the rule file the way `nginx -t` checks nginx's configuration. The first of these changes how httpdog is installed under systemd: there are now two unit files, and an existing install has to be upgraded by hand, see "Two unit files in place of one" below.

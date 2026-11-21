@@ -1,22 +1,5 @@
-# Starter template: works without changing the log format
-#
-# For: nginx or Apache using the default combined format (no log_format / LogFormat of your own).
-# Send the logs over or feed them in with --stdin and it runs; no rule needs its paths adjusted to your site.
-#
-# Try it first (no setup needed, replay an existing log):
-#   httpdog --stdin --config examples/00-combined-starter.yaml < /var/log/nginx/access.log
-#
-# The fields combined offers are fixed:
-#   remote_addr, remote_user, time_local, request, request_method, request_uri, request_path, uri,
-#   server_protocol, http_referer, http_user_agent (strings), status, body_bytes_sent (numbers)
-# request_path and uri are the same here: the path without the query string. They differ in the JSON format,
-# and the rules below pick between them the way the JSON templates do, so they can be copied over as they are.
-# There is no host and no request_time, so grouping by site and slow-request rules are not possible;
-# for those, switch to the JSON format in deploy/nginx-snippet.conf.
-# A rule that refers to a field that does not exist is rejected at load time.
-#
-# This file only notifies console (stderr / journald) and needs no environment variables.
-# To send to a webhook, add a webhook notifier as in rules.example.yaml and list it under notify in the rules.
+# Starter for the default combined log format of nginx / Apache. Logs to the system log only.
+# Docs: https://github.com/guanting112/httpdog/blob/main/docs/rules.md#using-the-rule-templates
 
 format: combined
 
@@ -25,7 +8,7 @@ notifiers:
     type: stderr
 
 rules:
-  # A sensitive file was read successfully (status 200 / 206). This is not someone trying; it has already leaked. Act at once.
+  # A sensitive file was served, not just asked for
   - id: sensitive-file-exposed
     when:
       all:
@@ -41,8 +24,6 @@ rules:
     notify: [console]
     message: "Sensitive file read: {uri} (status {status}, {body_bytes_sent} bytes, from {remote_addr})"
 
-  # Someone is looking for sensitive files (found or not). Logged once per IP every 10 minutes.
-  # Keep this list the same as the one above
   - id: sensitive-file-probe
     when:
       any:
@@ -56,7 +37,6 @@ rules:
     notify: [console]
     message: "{remote_addr} tried to access {request_path} (status {status})"
 
-  # User-Agent of known scanning tools
   - id: scanner-user-agent
     when:
       field: http_user_agent
@@ -67,7 +47,6 @@ rules:
     notify: [console]
     message: "{remote_addr} is using a scanning tool: {http_user_agent}"
 
-  # Many 404s from one IP in a short time, usually brute-force path guessing
   - id: not-found-scan
     when: { field: status, op: eq, value: 404 }
     group_by: remote_addr
@@ -76,7 +55,6 @@ rules:
     notify: [console]
     message: "{remote_addr} many 404s, latest: {request_uri}"
 
-  # Many 401 / 403 from one IP in a short time; possibly guessing passwords or probing permissions
   - id: auth-failures
     when: { field: status, op: in, value: [401, 403] }
     group_by: remote_addr
@@ -85,7 +63,6 @@ rules:
     notify: [console]
     message: "{remote_addr} many auth failures, latest: {request_method} {request_path} -> {status}"
 
-  # Site-wide 5xx surge
   - id: server-errors
     when: { field: status, op: gte, value: 500 }
     threshold: { count: 50, window: 1m }
@@ -93,7 +70,6 @@ rules:
     notify: [console]
     message: "5xx surge, latest: {request_method} {request_path} -> {status}"
 
-  # Backend unreachable or timing out (502 / 503 / 504), usually the application is down or restarting
   - id: gateway-errors
     when: { field: status, op: in, value: [502, 503, 504] }
     threshold: { count: 10, window: 30s }
@@ -101,7 +77,6 @@ rules:
     notify: [console]
     message: "Backend not responding, latest: {request_method} {request_path} -> {status}"
 
-  # One IP flooding: more than 300 requests in 10 seconds
   - id: single-ip-flood
     when: { field: remote_addr, op: exists }
     group_by: remote_addr
