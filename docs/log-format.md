@@ -18,7 +18,7 @@ Fields with the same name mean the same thing in both formats, so most rules wor
 
 ## JSON format
 
-Put the contents of `deploy/nginx-snippet.conf` inside nginx's `http { }` (shown in the [README](../README.md#option-2-json)). The fields a rule can use are **the keys of the JSON on each log line**: what is available is decided by nginx's `log_format`. The default setup has these 10, and httpdog adds one of its own, `request_path`:
+`deploy/nginx-snippet.conf` goes inside nginx's `http { }`; the install in the README does that by placing it in `/etc/nginx/conf.d/` (the snippet is shown in the [README](../README.md#option-2-json)). A `server { }` block with an `access_log` line of its own needs the snippet's `access_log syslog:...` line as well: nginx uses the lines of the innermost level that has any, so such a site sends httpdog nothing otherwise. The fields a rule can use are **the keys of the JSON on each log line**: what is available is decided by nginx's `log_format`. The default setup has these 10, and httpdog adds one of its own, `request_path`:
 
 | Field | Type | nginx variable | Content | Example |
 |---|---|---|---|---|

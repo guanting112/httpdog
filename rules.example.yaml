@@ -1,5 +1,6 @@
 # Example httpdog rule file
-# Validate: httpdog --check --config rules.yaml
+# Check:    sudo httpdog -t                          (once it is /etc/httpdog/rules.yaml)
+#           httpdog -t --config rules.example.yaml   (any other file)
 # Try it:   httpdog --stdin --config rules.example.yaml < sample.log
 #           fires 3 alerts and sends them to HTTPDOG_WEBHOOK_URL, so you can use it to test your own receiver
 # Apply:    systemctl reload httpdog (sends SIGHUP; a broken new file keeps the old rules)

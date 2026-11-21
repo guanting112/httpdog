@@ -6,7 +6,7 @@
 [![build provenance: attested](https://img.shields.io/badge/provenance-attested-brightgreen?logo=github)](https://github.com/guanting112/httpdog/attestations)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/guanting112/httpdog/badge)](https://scorecard.dev/viewer/?uri=github.com/guanting112/httpdog)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16888/badge)](https://www.bestpractices.dev/projects/16888)
-[![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#2-安裝到-ubuntu)
+[![Linux amd64 and arm64](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-blue?logo=linux&logoColor=white)](#1-安裝到-ubuntu)
 
 - 🐕 **httpdog**(你在這裡):盯著網站的 access log,看到可疑或異常的請求就通知你
 - 🏠 [httpdog-house](https://github.com/guanting112/httpdog-house/blob/main/README.zh-TW.md):把每台主機上 httpdog 的告警收進同一個可以搜尋的網頁,跑在你自己的 Cloudflare 帳號上
@@ -48,59 +48,18 @@ nginx / Apache ──每筆請求的 log──▶ httpdog(照規則比對)──
 
 ## 目錄
 
-1. [先試跑看看](#1-先試跑看看)
-2. [安裝到 Ubuntu](#2-安裝到-ubuntu)
-3. [把 log 接進來](#3-把-log-接進來)
-4. [寫規則](#4-寫規則)
-5. [接收通知](#5-接收通知)
-6. [日常維運](#6-日常維運)
-7. [遇到問題](#7-遇到問題)
+1. [安裝到 Ubuntu](#1-安裝到-ubuntu)
+2. [把 log 接進來](#2-把-log-接進來)
+3. [寫規則](#3-寫規則)
+4. [接收通知](#4-接收通知)
+5. [日常維運](#5-日常維運)
+6. [遇到問題](#6-遇到問題)
 
 其他:[命令列](#命令列)、[更多文件](#更多文件)、[開發](#開發)
 
-## 1. 先試跑看看
+## 1. 安裝到 Ubuntu
 
-不需要 nginx:從最新的 Release 下載執行檔,用附的 `sample.log` 重播一次,就能看到規則怎麼觸發。Release 的執行檔是給 Linux 的 amd64 與 arm64 用的,其他系統請[自己編譯](#自己編譯)。
-
-```bash
-# 執行檔:從最新的 Release 下載。dpkg 會印出 amd64 或 arm64;
-# 沒有 dpkg 的系統請自己設定 ARCH(uname -m 印 x86_64 就是 amd64,aarch64 就是 arm64)
-ARCH=$(dpkg --print-architecture)
-curl -fsSLo httpdog "https://github.com/guanting112/httpdog/releases/latest/download/httpdog-linux-$ARCH"
-chmod +x httpdog
-
-# 範例規則檔與範例 log:抓跟執行檔同一個版本的
-RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(./httpdog --version | cut -d' ' -f2)"
-curl -fsSLO "$RAW/rules.example.yaml"
-curl -fsSLO "$RAW/sample.log"
-
-# 範例規則會把告警送到 webhook。還沒有接收端的話,先給假的網址與密鑰
-export HTTPDOG_WEBHOOK_URL=http://127.0.0.1:9/dummy
-export HTTPDOG_WEBHOOK_SECRET=dummy
-
-./httpdog --check --config rules.example.yaml          # 檢查規則檔有沒有寫錯
-./httpdog --stdin --config rules.example.yaml < sample.log
-```
-
-預期輸出:
-
-```
-httpdog started: 4 rule(s), reading from stdin
-ALERT [httpdog] sensitive-file-probe | 203.0.113.7 tried to access /.env (status 404) | remote_addr=203.0.113.7
-ALERT [httpdog] slow-request | /report/monthly took 7.31s
-ALERT [httpdog] sensitive-file-probe | 192.0.2.44 tried to access /backup/db.sql (status 404) | remote_addr=192.0.2.44
-done: 6 lines, 0 unparseable, 3 alerts fired
-```
-
-程式的輸出與 log 訊息都是英文。每一行 `ALERT` 就是一則通知。`sample.log` 裡第一個 IP 接著又探測了 `/.git/config`,但同一個 IP 剛通知過(還在冷卻時間內),所以沒有重複通知。
-
-用假網址時,每則 `ALERT` 後面還會多幾行 `webhook attempt N failed`,整個過程約 9 秒,這是正常的:網址是假的,送不出去。
-
-**想順便測試自己的 webhook 接收端**,把上面兩個環境變數換成真的網址與密鑰再跑一次,接收端會收到這 3 則告警,畫面上也不會有失敗的訊息。還沒有接收端可以先用 [docs/webhook.md](docs/webhook.md#receiver-example) 的範例在本機起一個。
-
-## 2. 安裝到 Ubuntu
-
-每個版本的 [Release](https://github.com/guanting112/httpdog/releases) 都附有 amd64 與 arm64 的執行檔,下載後不用安裝 Rust,也不用管 Ubuntu 的版本。
+每個版本的 [Release](https://github.com/guanting112/httpdog/releases) 都附有 amd64 與 arm64 的執行檔,下載後不用安裝 Rust,也不用管 Ubuntu 的版本。下面六個步驟做完,你會看到對自己網站發的一個請求變成一則告警。
 
 ```bash
 # 1. 執行檔:從最新的 Release 下載。dpkg 會印出 amd64 或 arm64
@@ -111,25 +70,55 @@ sha256sum --check --ignore-missing SHA256SUMS      # 應該顯示 httpdog-linux-
 sudo install -m 755 "httpdog-linux-$ARCH" /usr/local/bin/httpdog
 httpdog --version
 
-# 2. 範例規則檔與兩個 systemd unit:抓跟執行檔同一個版本的
+# 2. 範例規則檔、兩個 systemd unit 與 nginx 的設定片段:抓跟執行檔同一個版本的
 RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(httpdog --version | cut -d' ' -f2)"
 curl -fsSLO "$RAW/rules.example.yaml"
 curl -fsSLO "$RAW/deploy/httpdog.service"
 curl -fsSLO "$RAW/deploy/httpdog.socket"
+curl -fsSLO "$RAW/deploy/nginx-snippet.conf"
 sudo install -d /etc/httpdog
 sudo install -m 644 rules.example.yaml /etc/httpdog/rules.yaml
 
 # 3. 機密(webhook 的網址與密鑰),只有 root 讀得到
 sudo install -m 600 /dev/null /etc/httpdog/secrets.env
-sudoedit /etc/httpdog/secrets.env      # 寫入 HTTPDOG_WEBHOOK_URL=https://<你的接收端>/...
-                                       # 以及 HTTPDOG_WEBHOOK_SECRET=<openssl rand -hex 32 產生的值>
+sudoedit /etc/httpdog/secrets.env
+```
 
-# 4. 交給 systemd 管理
+`secrets.env` 寫兩行,分別是告警要送去哪裡、用什麼簽章:
+
+```
+HTTPDOG_WEBHOOK_URL=https://<你的接收端>/...
+HTTPDOG_WEBHOOK_SECRET=<openssl rand -hex 32 產生的值>
+```
+
+**還沒有接收告警的地方?** 網址先寫 `http://127.0.0.1:9/none`,密鑰隨便填,繼續往下做。每一則告警也都會寫進 httpdog 的 log,第 6 步看的就是那裡;webhook 只是會送失敗,等你換上真的網址為止([第 4 節](#4-接收通知))。
+
+```bash
+# 4. 檢查規則檔,然後交給 systemd 管理
+sudo httpdog -t                          # 應該印出 OK: /etc/httpdog/rules.yaml: 4 rule(s)
 sudo install -m 644 httpdog.service httpdog.socket /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now httpdog      # 會連 httpdog.socket 一起啟用並啟動
-systemctl status httpdog
+
+# 5. 讓 nginx 把 access log 送給 httpdog
+sudo install -m 644 nginx-snippet.conf /etc/nginx/conf.d/httpdog.conf
+sudo nginx -t && sudo systemctl reload nginx
+
+# 6. 確認有在動:對自己的網站要一個範例規則會盯的檔案,再看 httpdog 的 log
+curl -s -o /dev/null http://127.0.0.1/.env
+journalctl -u httpdog -n 5
 ```
+
+log 裡應該有這兩行,第二行就是告警(狀態碼依你的網站怎麼回應而定):
+
+```
+httpdog started: 4 rule(s), listening on unix:/run/httpdog/httpdog.sock (socket held by systemd)
+ALERT [httpdog] sensitive-file-probe | 127.0.0.1 tried to access /.env (status 404) | remote_addr=127.0.0.1
+```
+
+**httpdog 做的每件事都會出現在這份 log 裡**:告警、webhook 送失敗、reload 的結果,以及起不來的原因。`journalctl -u httpdog -f` 可以即時跟著看。第 3 步用的若是暫時的網址,每則 `ALERT` 後面會跟著幾行 `webhook attempt N failed`;那是因為網址是假的,不是哪裡壞了。
+
+**沒有 `ALERT`?** 最常見的原因在第 5 步:`server { }` 區塊裡如果有自己的 `access_log`,它就不會用 `conf.d` 裡的那一行。把 `/etc/nginx/conf.d/httpdog.conf` 裡 `access_log syslog:...` 那一行也加進那個 `server { }` 區塊,再 reload nginx。其他原因見[遇到問題](#6-遇到問題)。
 
 補充:
 
@@ -141,8 +130,10 @@ systemctl status httpdog
   gh attestation verify "httpdog-linux-$ARCH" -R guanting112/httpdog --bundle httpdog.sigstore.json
   ```
 
+- `sudo httpdog -t` 檢查 `/etc/httpdog/rules.yaml`,就像 `nginx -t` 檢查 nginx 的設定一樣,而且會自己讀 `secrets.env`。每次改完規則檔、reload 之前都跑一次。
 - unit 檔有兩個:`httpdog.socket` 是 log 進來的那個 socket,由 systemd 建立並持有;`httpdog.service` 是程式本身。socket 在 systemd 手上,所以重啟 httpdog 不會掉 log。
-- `httpdog.socket` 假設 nginx 的 worker 以 `www-data` 群組執行,Ubuntu 與 Debian 都是這樣。其他系統(Fedora 與 Rocky Linux 是 `nginx`)要在第 4 步之前把 `httpdog.socket` 裡的 `www-data` 改掉。SELinux 是 enforcing 的系統(這兩個發行版預設就是)還要多做一步。兩件事都寫在[誰可以送 log](#誰可以送-log)。
+- `httpdog.socket` 假設 nginx 的 worker 以 `www-data` 群組執行,Ubuntu 與 Debian 都是這樣。其他系統(Fedora 與 Rocky Linux 是 `nginx`)要在第 4 步之前把 `httpdog.socket` 裡的 `www-data` 改掉。SELinux 是 enforcing 的系統(這兩個發行版預設就是)還要多做一步。兩件事都寫在[誰可以送 log](#誰可以送-log)。RHEL 與 Rocky Linux 的 `sudo` 不會去找 `/usr/local/bin`,那裡要寫成 `sudo /usr/local/bin/httpdog -t`。
+- 第 5 步用的是 JSON 格式的 log,範例規則檔需要它。不想動 nginx 的 log 格式,或用的是 Apache,見[第 2 節](#2-把-log-接進來)。
 - 服務不需要事先建立帳號(unit 檔用了 `DynamicUser`)。`secrets.env` 由 systemd 以 root 讀取後才降權,服務本身碰不到那個檔案。
 - `examples/` 底下的規則範本在 repo 裡,不在 Release 的附件裡:用 `git clone`,或下載 Release 頁面上的 Source code 壓縮檔。
 
@@ -158,9 +149,9 @@ cargo build --release
 
 要安裝自己編譯的版本,把上面的第 1 步換成 `sudo install -m 755 target/release/httpdog /usr/local/bin/`;`rules.example.yaml` 與 `deploy/` 底下的兩個 unit 檔在 clone 下來的目錄裡就有。
 
-## 3. 把 log 接進來
+## 2. 把 log 接進來
 
-httpdog 看得懂兩種 log 格式,擇一即可:
+安裝的第 5 步已經用 JSON 格式把 nginx 接上了。這一節講的是另一種格式、Apache 的接法,以及細節。httpdog 看得懂兩種 log 格式:
 
 | | 方式一:預設格式(`combined`) | 方式二:JSON |
 |---|---|---|
@@ -193,7 +184,7 @@ Apache 的接法不一樣,見 [docs/log-format.md](docs/log-format.md#apache)。
 
 ### 方式二:JSON
 
-把 `deploy/nginx-snippet.conf` 的內容放進 nginx 的 `http { }`,然後 `sudo nginx -t && sudo systemctl reload nginx`:
+安裝的第 5 步做的就是這件事。`deploy/nginx-snippet.conf` 的內容要放在 nginx 的 `http { }` 裡,放進 `/etc/nginx/conf.d/` 的檔案就是被引入到那裡;然後 `sudo nginx -t && sudo systemctl reload nginx`:
 
 ```nginx
 log_format httpdog escape=json
@@ -216,6 +207,7 @@ access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname htt
 ### 兩種方式都要注意
 
 - 原本寫檔的 `access_log` 可以保留,同一層可以有多行。
+- **`server { }` 區塊裡有自己的 `access_log` 時,不會用 `http { }` 那一層的。** nginx 只採用最內層有寫的那一組。這樣的站台要把 `access_log syslog:...` 那一行也放進它的 `server { }` 區塊,否則它什麼都不會送給 httpdog。
 - 站台在 Cloudflare 或其他反向代理後面時,要先設定 nginx 的 `real_ip`。否則每筆 log 的來源 IP 都是代理的 IP,「每個 IP 各算各的」會變成所有人算在一起。
 
 每個欄位的內容、型別與注意事項見 [docs/log-format.md](docs/log-format.md)。
@@ -236,7 +228,7 @@ httpdog 收到的每一行 log 都會照單全收,所以「誰送得進來」很
 
 細節見 [docs/log-format.md](docs/log-format.md#how-logs-reach-httpdog)。
 
-## 4. 寫規則
+## 3. 寫規則
 
 規則檔是一個 YAML 檔(也可以用 JSON),完整範例在 `rules.example.yaml`。下面這份只有一條規則:**同一個 IP 在 60 秒內登入失敗 20 次就通知**。
 
@@ -293,7 +285,7 @@ rules:
 
 範本裡的門檻與路徑都是示意,要換成你站台實際的數字與路徑。套用前的注意事項見 [docs/rules.md](docs/rules.md#using-the-rule-templates)。
 
-## 5. 接收通知
+## 4. 接收通知
 
 通知有兩個去處,在規則檔的 `notifiers` 設定:
 
@@ -327,7 +319,7 @@ webhook 收到的內容長這樣:
 2. **`instance` 用來分辨是哪一台發的**。多台 httpdog 送到同一個接收端時,在各自的規則檔寫上不同的 `instance`;沒寫的話是 `unknown`。
 3. **送不出去會重試**:逾時 5 秒,總共試 3 次,都失敗就把告警寫進系統 log 後放棄。
 
-每個欄位的說明、簽章怎麼驗證、可以直接拿去改的接收端範例,見 [docs/webhook.md](docs/webhook.md)。
+每個欄位的說明、簽章怎麼驗證、可以直接拿去改的接收端範例,見 [docs/webhook.md](docs/webhook.md)。那裡也有用範例 log [送三則測試告警給接收端](docs/webhook.md#testing-your-receiver)的做法,不會動到已經裝好的服務。
 
 ### 現成的接收端:httpdog-house
 
@@ -335,10 +327,11 @@ webhook 收到的內容長這樣:
 
 要接上一台 httpdog,在它的 **keys** 頁面建立一把登記了這台 instance 名稱的金鑰,頁面會顯示要寫進 `secrets.env` 的兩行。規則檔的 `instance` 必須是金鑰登記的名稱:沒有任何金鑰登記的名稱,送來的告警會被拒收。步驟見[它的 README](https://github.com/guanting112/httpdog-house/blob/main/README.zh-TW.md#接上一台-httpdog)。
 
-## 6. 日常維運
+## 5. 日常維運
 
 ```bash
 journalctl -u httpdog -f            # 即時看 log(告警、重試、reload 的結果都在這)
+sudo httpdog -t                     # 檢查規則檔,就像 nginx -t
 sudo systemctl reload httpdog       # 套用新規則
 sudo systemctl restart httpdog      # 改了 secrets.env,或裝了新版本之後
 sudo systemctl stop httpdog.socket httpdog      # 真的要停下來
@@ -346,23 +339,26 @@ sudo systemctl stop httpdog.socket httpdog      # 真的要停下來
 
 重啟不會掉 log。socket 在 systemd 手上,不在 httpdog 手上,所以 nginx 的連線不會斷;httpdog 不在的那段時間送來的 log 會先排在 socket 裡,等它回來再讀(排得下幾百行,見 [docs/log-format.md](docs/log-format.md#the-unix-socket))。也因為這樣,只停 httpdog 是停不住的:下一行 log 進來,systemd 就會再把它叫起來。要停就連 `httpdog.socket` 一起停。
 
-**改規則的建議流程**:先檢查,再拿最近的 log 重播看會觸發幾次,最後才 reload。
+**改規則**:編輯、檢查、reload,跟改 nginx 設定是同樣的三步。
 
 ```bash
-# 1. 檢查規則檔。secrets.env 只有 root 讀得到,所以要先載入環境變數才檢查得過
-sudo bash -c 'set -a; . /etc/httpdog/secrets.env; set +a
-  httpdog --check --config /etc/httpdog/rules.yaml'
-
-# 2. 拿最近的 log 重播,結束時會印出觸發了幾則(規則檔用到 webhook 的話,同樣要先載入環境變數)
-httpdog --stdin --config new-rules.yaml < access.log
-
-# 3. 套用
-sudo systemctl reload httpdog
+sudoedit /etc/httpdog/rules.yaml
+sudo httpdog -t && sudo systemctl reload httpdog
 journalctl -u httpdog -n 5          # 確認出現 rules reloaded
 ```
 
-- 第 1 步是用 shell 讀 `secrets.env`,所以網址裡有 `&` 等特殊字元時,檔案裡的值要用單引號包起來。
-- 第 2 步重播時,規則命中的告警會真的送出去。不想打擾接收端的話,先把新規則的 `notify` 改成只有 `console`,確認沒問題再改回來。
+- `sudo httpdog -t` 會印出 `OK: /etc/httpdog/rules.yaml: 4 rule(s)`,或是哪裡寫錯、錯在哪。它會照 systemd 的讀法,從 `/etc/httpdog/secrets.env` 讀 webhook 的網址與密鑰,所以要加 `sudo`。
+- 想在放上去之前先檢查某個檔案:`sudo httpdog -t --config new-rules.yaml`。
+- 規則檔有錯時 reload 會沿用舊規則,所以就算忘了檢查,監控也不會停。原因會寫在 log 裡。
+
+**想知道新規則會觸發幾次**,套用之前可以拿最近的 log 重播,結束時會印出觸發了幾則:
+
+```bash
+httpdog --stdin --config new-rules.yaml < access.log
+```
+
+- 規則檔用到 webhook 的話,重播時環境裡要有 `secrets.env` 的那兩個變數,先 `export` 起來。
+- 重播時,規則命中的告警會真的送出去。不想打擾接收端的話,先把新規則的 `notify` 改成只有 `console`,確認沒問題再改回來。
 
 **手動送一筆測試**,確認整條路是通的(JSON 格式,搭配有比對 `/.env` 的規則):
 
@@ -373,11 +369,11 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 
 要加 `sudo`,因為只有 root 與 nginx 的群組可以寫入這個 socket。不加的話指令會以 `Permission denied` 結束,這正是保護有在運作。
 
-## 7. 遇到問題
+## 6. 遇到問題
 
 | 現象 | 可能原因 |
 |---|---|
-| 完全沒有告警 | nginx 的 `server=` 與規則檔的 `listen` 不一致;nginx 的 worker 不在 `httpdog.socket` 開放 socket 的那個群組裡(nginx 的 error log 會有 `Permission denied`),或 SELinux 是 enforcing 而政策檔還沒安裝(同樣是 `Permission denied`),見[誰可以送 log](#誰可以送-log);或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
+| 完全沒有告警 | 站台的 `server { }` 區塊裡有自己的 `access_log`,所以沒有用到給 httpdog 的那一行(那裡也要加,見[兩種方式都要注意](#兩種方式都要注意));nginx 的 `server=` 與規則檔的 `listen` 不一致;nginx 的 worker 不在 `httpdog.socket` 開放 socket 的那個群組裡(nginx 的 error log 會有 `Permission denied`),或 SELinux 是 enforcing 而政策檔還沒安裝(同樣是 `Permission denied`),見[誰可以送 log](#誰可以送-log);或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
 | log 出現 `warning: listening on UDP ...` | 規則檔的 `listen` 是 UDP 位址,連得到它的程式都能送假的 log 給 httpdog。要改回 unix socket,把寫了 UDP 位址的三個地方還原:拿掉 `listen` 那一行、把 `httpdog.socket` 的 `ListenDatagram=` 改回 `/run/httpdog/httpdog.sock`、把 nginx 的 `server=` 改成 `unix:/run/httpdog/httpdog.sock`。然後執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket && sudo systemctl reload nginx` |
 | reload 時出現 `reload failed, keeping the old rules: listen is now ...` | 規則檔寫的位址跟 systemd 持有的 socket 不一樣。reload 沒辦法讓 httpdog 換位址,而且照這份規則檔,下次重開機後 httpdog 會起不來。把 `listen` 改回來;真的要換位址的話,見 [docs/log-format.md](docs/log-format.md#the-unix-socket) |
 | 起不來:`config error: the socket systemd passed is not the one the rule file names` | 規則檔的 `listen` 與 `httpdog.socket` 的 `ListenDatagram=` 寫的位址不一樣。改成一樣,再執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket`。用預設的 socket 時,規則檔完全不需要寫 `listen` |
@@ -395,10 +391,12 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 ## 命令列
 
 ```
-httpdog [--config rules.yaml] [--check] [--stdin] [--version]
+httpdog [--config rules.yaml] [-t] [--stdin] [--version]
 
   -c, --config <檔案>  規則檔,預設 ./rules.yaml
-      --check          只驗證規則檔,不啟動
+  -t, --check          檢查規則檔後結束,就像 nginx -t。沒有指定 --config 時檢查
+                       /etc/httpdog/rules.yaml;規則檔用到、環境裡卻沒有的變數,
+                       會從 /etc/httpdog/secrets.env 讀
       --stdin          從 stdin 讀 log,不開 socket
   -V, --version        印出版本(例如 httpdog 0.2.3)後結束
 ```
@@ -418,7 +416,7 @@ httpdog [--config rules.yaml] [--check] [--stdin] [--version]
 | 0 | 正常結束 |
 | 1 | 無法監聽 `listen` 指定的位址 |
 | 2 | 命令列參數錯誤 |
-| 78 | 規則檔錯誤。此時 systemd 不會自動重啟(unit 檔設了 `RestartPreventExitStatus=78`) |
+| 78 | 規則檔錯誤,`-t` 檢查沒過時也是這個結束碼。此時 systemd 不會自動重啟(unit 檔設了 `RestartPreventExitStatus=78`) |
 
 ## 更多文件
 

@@ -11,7 +11,7 @@ cargo clippy --all-targets    # Must be warning-free
 cargo fmt
 ```
 
-All of these are wrapped in the `Makefile`. `make ci` runs the format check, clippy, the unit tests, `--check` on every example rule file and the smoke tests on both sample logs, in that order; run it before committing. `make` with no arguments lists every target.
+All of these are wrapped in the `Makefile`. `make ci` runs the format check, clippy, the unit tests, `httpdog -t` on every example rule file and the smoke tests on both sample logs, in that order; run it before committing. `make` with no arguments lists every target.
 
 ## Fuzzing
 
@@ -23,6 +23,7 @@ Log content comes from the requests a site receives, so the code that reads it i
 | `parse_combined` | The `combined` parser never panics, a parsed line has all 13 fields, and unescaping never produces a control character |
 | `rule_engine` | The whole path of a log line (parse, match with every operator, thresholds, cooldowns, message template) never panics, and the text of an alert is always a single line |
 | `rule_file` | Loading an arbitrary rule file either succeeds or returns an error, never a panic |
+| `secrets_file` | Reading an arbitrary secrets file never panics, and yields valid variable names, each once |
 
 ```bash
 rustup toolchain install nightly && cargo install cargo-fuzz --locked   # once
@@ -48,10 +49,11 @@ Receiving logs, matching and sending notifications are independent: slow notific
 | `src/config.rs` | Data structures of the rule file; only reads the file |
 | `src/engine.rs` | Rule engine: rule file validation, matching, threshold counting, cooldowns |
 | `src/format.rs` | Parses a log line into fields: `json` and `combined` |
+| `src/envfile.rs` | Reads the secrets file the way systemd does, for `httpdog -t` |
 | `src/notify.rs` | Notifier thread, webhook body, signature and retries |
 | `src/main.rs` | Arguments, signals, socket / stdin input, main loop, systemd notification |
 | `deploy/` | The two systemd units (`httpdog.socket` holds the socket logs arrive on, `httpdog.service` runs the program), nginx config snippet, and the SELinux policy for systems where it is enforcing |
-| `tests/` | Starts the built binary the way systemd does, with the socket passed in, and checks that a restart keeps it (Linux only) |
+| `tests/` | Starts the built binary the way systemd does, with the socket passed in, and checks that a restart keeps it (Linux only). `tests/data/` holds a secrets file with lines of every kind and what systemd makes of it |
 | `examples/` | The `combined` starter rules and 5 scenario templates |
 | `fuzz/` | Fuzz targets and the script that runs them |
 | `sample.log`, `sample.combined.log` | Sample logs for the smoke tests (one JSON, one `combined`) |

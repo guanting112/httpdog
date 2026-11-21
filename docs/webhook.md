@@ -143,16 +143,21 @@ HTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
 
 ## Testing your receiver
 
-No nginx needed. Replay the bundled `sample.log` with the example rule file and httpdog sends 3 real, signed alerts to your receiver:
+No nginx needed, and httpdog does not have to be installed as a service: the binary, the example rule file and a sample log are enough. Replay `sample.log` with the example rule file and httpdog sends 3 real, signed alerts to your receiver:
 
 ```bash
+# The two files, from the same version as the binary (in a clone of the repository they are already there)
+RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(httpdog --version | cut -d' ' -f2)"
+curl -fsSLO "$RAW/rules.example.yaml"
+curl -fsSLO "$RAW/sample.log"
+
 export HTTPDOG_WEBHOOK_URL='https://<your receiver>/...'     # http://127.0.0.1:8080/ with the example above
 export HTTPDOG_WEBHOOK_SECRET='<the same secret as the receiver>'
 
 httpdog --stdin --config rules.example.yaml < sample.log
 ```
 
-- **It works**: the terminal shows only 3 `ALERT` lines and the final summary, and the receiver gets 3 alerts whose `rule` is `sensitive-file-probe`, `slow-request` and `sensitive-file-probe`, with `instance` set to `web-01`.
+- **It works**: the terminal shows only 3 `ALERT` lines and the final summary (`done: 6 lines, 0 unparseable, 3 alerts fired`), and the receiver gets 3 alerts whose `rule` is `sensitive-file-probe`, `slow-request` and `sensitive-file-probe`, with `instance` set to `web-01`.
 - **It does not work**: each `ALERT` is followed by `webhook attempt N failed` and the reason, and httpdog gives up after 3 attempts.
 - **A response other than 2xx also counts as a failure.** For example a 401 because signature verification failed; in that case check first that both sides have the same secret.
 
