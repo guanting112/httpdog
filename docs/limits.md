@@ -83,7 +83,7 @@ On Debian 11 the nginx packages could not be downloaded that day (the security m
 
 **The socket held by systemd**
 
-Added after 0.2.3 and tested on 2026-11-21 in local virtual machines (arm64, sharing the host's kernel, so no SELinux enforcing; the next section has that), with `deploy/httpdog.socket` and `deploy/httpdog.service` installed the way the README says and nginx running 4 workers. The binary was a static arm64 build of the working tree, made with the same musl target CI uses, not a binary built by CI. From here on, what the sections above say about a restart making a new socket describes the versions they tested.
+Added after 0.2.3 and tested on 2026-11-21 in local virtual machines (arm64, sharing the host's kernel, so no SELinux enforcing; the next section has that), with `deploy/httpdog.socket` and `deploy/httpdog.service` installed the way the README says and nginx running 4 workers. The binary was a static arm64 build of the working tree, made with the same musl target CI uses; the Ubuntu 24.04 machine was run once more with the arm64 binary CI built for the commit, with the same result. From here on, what the sections above say about a restart making a new socket describes the versions they tested.
 
 | Distribution | systemd | nginx | Checks passed |
 |---|---|---|---|
@@ -106,7 +106,7 @@ Added after 0.2.3 and tested on 2026-11-21 in local virtual machines (arm64, sha
 
 **The socket held by systemd, on cloud servers**
 
-Tested on 2026-11-21 on freshly installed servers at a cloud provider: amd64 KVM virtual machines with one CPU, each running the distribution's own kernel, with the default AppArmor or SELinux setting left as it was. The checks are the ones of the section above, plus the SELinux ones on the two distributions that enforce it. The binary was a static amd64 build of the working tree, made on one of the servers with the command CI uses, not a binary built by CI; the test suite, including the tests that pass the socket the way systemd does, passed there first.
+Tested on 2026-11-21 on freshly installed servers at a cloud provider: amd64 KVM virtual machines with one CPU, each running the distribution's own kernel, with the default AppArmor or SELinux setting left as it was. The checks are the ones of the section above, plus the SELinux ones on the two distributions that enforce it. Every server was run twice, with the same results: first with a static amd64 build of the working tree, made on one of the servers with the command CI uses, after the test suite had passed there (including the tests that pass the socket the way systemd does); then with the amd64 binary CI built for the commit, checked against the checksum CI published with it.
 
 | Distribution | Kernel | systemd | nginx | Enforcing | Checks passed |
 |---|---|---|---|---|---|
@@ -214,7 +214,7 @@ The memory ceiling of the unit file was tested the same day in an OrbStack machi
 **Not verified**
 
 - The arm64 binary of the 0.2.0 release under systemd (the arm64 runs above used a build of the same source), and the unix socket input on Debian 11 with nginx and on Debian 12.
-- The socket held by systemd with a binary built by CI, on arm64 with a distribution's own kernel, and on Debian 12 and Ubuntu 22.04 outside local virtual machines.
+- The socket held by systemd on arm64 with a distribution's own kernel, on Debian 12 and Ubuntu 22.04 outside local virtual machines, and with a released binary (no release carries it yet).
 - SELinux enforcing with a socket path other than the default, and with Apache.
 - The 0.2.1 release under systemd on Debian and Ubuntu, and on arm64.
 - amd64 outside a virtual machine.
