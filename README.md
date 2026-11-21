@@ -21,6 +21,8 @@ For example:
 
 - Someone is scanning for sensitive files such as `/.env` or `/.git/config`
 - The same IP fails to log in 20 times within a minute
+- Someone is guessing the names of files your users uploaded: ID scans, PDFs, spreadsheets
+- One address opens member records or orders in the admin area by the hundred
 - The site suddenly returns a lot of 5xx, or some pages become very slow
 
 You describe what should trigger a notification in a rule file. httpdog matches every log line nginx / Apache sends against it and notifies you on a match.
@@ -272,7 +274,7 @@ Comparisons include equality, prefix, suffix, contains, regular expressions and 
 
 ### Ready-made rule templates
 
-There are 6 rule files under `examples/`. Each is a complete config that loads as it is, and the comments at the top say who it is for and what to change before using it.
+There are 7 rule files under `examples/`. Each is a complete config that loads as it is.
 
 | File | Scenario | What it catches |
 |---|---|---|
@@ -282,8 +284,34 @@ There are 6 rule files under `examples/`. Each is a complete config that loads a
 | `03-site-health.yaml` | Site health | 5xx surges, an unresponsive backend, a high error rate on one site, slow requests, failing health checks, clients disconnecting early |
 | `04-traffic-surge.yaml` | Traffic anomalies | Site-wide peaks, one IP flooding, one endpoint being hammered, scripts and crawlers, very large responses |
 | `05-critical-endpoints.yaml` | Business-critical paths | Checkout errors, failed or slow payment callbacks, unknown sources entering the admin area, delete operations in the admin area, surges of API client errors |
+| `06-private-data.yaml` | Private files and customer data | Guessing the names of uploaded files (ID scans, contracts, spreadsheets), bulk downloads of documents, walking through record numbers, one address opening members or orders in the admin area in bulk, every export from the admin area |
 
-The thresholds and paths in the templates are placeholders; replace them with your site's real numbers and paths. For what to check before using them, see [docs/rules.md](docs/rules.md#using-the-rule-templates).
+The thresholds and paths in the templates are placeholders; replace them with your site's real numbers and paths. What to change in each file is in [docs/rules.md](docs/rules.md#using-the-rule-templates).
+
+### Let a coding agent write them
+
+Which paths are worth watching is different on every site, and it is all in your project's code. A coding agent such as Claude Code or OpenAI Codex can read it there: open the agent in your project and ask for the rules.
+
+![Three steps: ask a coding agent inside your project to write httpdog rules; it reads the routes and upload paths and writes a rules.yaml with the project's real paths; check the file on the server with sudo httpdog -t](docs/rules-with-agent.png)
+
+A prompt to start from:
+
+```text
+Write an httpdog rule file for this project and save it as rules.yaml.
+
+How rules work:
+https://raw.githubusercontent.com/guanting112/httpdog/main/docs/rules.md
+https://raw.githubusercontent.com/guanting112/httpdog/main/docs/log-format.md
+Examples: https://github.com/guanting112/httpdog/tree/main/examples
+
+Read this project's routes, upload paths and admin pages, then write rules for what
+deserves an alert here: guessing of uploaded files, bulk viewing or export of members
+and orders in the admin area, login abuse, errors on the paths that make money.
+The access log is in httpdog's JSON format. Use this project's real paths, match them
+with request_path, and list the thresholds you had to guess.
+```
+
+Put the result in `/etc/httpdog/rules.yaml` and run `sudo httpdog -t` before `sudo systemctl reload httpdog`. The thresholds are the agent's guesses; set them against your real traffic.
 
 ## 4. Receive notifications
 

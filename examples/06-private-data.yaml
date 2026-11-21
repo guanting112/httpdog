@@ -1,0 +1,97 @@
+# Scenario 6: private files and customer data. Replace the paths and file types with your site's.
+# Docs: https://github.com/guanting112/httpdog/blob/main/docs/rules.md#using-the-rule-templates
+
+notifiers:
+  console:
+    type: stderr
+  ops:
+    type: webhook
+    url_env: HTTPDOG_WEBHOOK_URL
+    secret_env: HTTPDOG_WEBHOOK_SECRET
+
+rules:
+  # One IP keeps missing under the upload paths: it is guessing file names
+  - id: upload-guessing
+    when:
+      all:
+        - { field: request_path, op: regex, value: '^/(uploads|storage|files|media)/' }
+        - { field: status, op: in, value: [403, 404] }
+    group_by: remote_addr
+    threshold: { count: 20, window: 1m }
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} is guessing uploaded files, latest: {request_path} -> {status}"
+
+  # A miss on a file named like an ID scan, a contract or a member list
+  - id: private-document-guessing
+    when:
+      all:
+        - field: request_path
+          op: regex
+          value: '(?i)(passport|id[-_]?card|identity|kyc|licen[cs]e|contract|invoice|payslip|payroll|salary|members?|customers?|orders?)[^/]*\.(pdf|jpe?g|png|docx?|xlsx?|csv|zip)$'
+        - { field: status, op: in, value: [403, 404] }
+    group_by: remote_addr
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} asked for a private document that is not there: {request_path} -> {status}"
+
+  # One IP downloads many uploaded documents
+  - id: document-bulk-download
+    when:
+      all:
+        - field: request_path
+          op: regex
+          value: '(?i)^/(uploads|storage|files|media)/.*\.(pdf|docx?|xlsx?|csv|zip)$'
+        - { field: status, op: in, value: [200, 206] }
+    group_by: remote_addr
+    threshold: { count: 50, window: 5m }
+    cooldown: 30m
+    notify: [console, ops]
+    message: "{remote_addr} downloaded many documents, latest: {request_path} ({body_bytes_sent} bytes)"
+
+  # One IP walks through record numbers it has no access to
+  - id: record-id-enumeration
+    when:
+      all:
+        - { field: request_path, op: regex, value: '^/(api/)?(users|members|orders|invoices)/[0-9]+' }
+        - { field: status, op: in, value: [403, 404] }
+    group_by: remote_addr
+    threshold: { count: 20, window: 1m }
+    cooldown: 10m
+    notify: [console, ops]
+    message: "{remote_addr} is walking through record numbers, latest: {request_path} -> {status}"
+
+  # Set the two thresholds above what one working day in the admin area looks like
+  - id: admin-member-bulk-view
+    when:
+      all:
+        - { field: request_path, op: regex, value: '^/admin/(members|users|customers)(/|$)' }
+        - { field: request_method, op: eq, value: GET }
+        - { field: status, op: eq, value: 200 }
+    group_by: remote_addr
+    threshold: { count: 100, window: 10m }
+    cooldown: 30m
+    notify: [console, ops]
+    message: "{remote_addr} opened many member records in the admin area, latest: {request_path}"
+
+  - id: admin-order-bulk-view
+    when:
+      all:
+        - { field: request_path, op: regex, value: '^/admin/orders(/|$)' }
+        - { field: request_method, op: eq, value: GET }
+        - { field: status, op: eq, value: 200 }
+    group_by: remote_addr
+    threshold: { count: 200, window: 10m }
+    cooldown: 30m
+    notify: [console, ops]
+    message: "{remote_addr} opened many orders in the admin area, latest: {request_path}"
+
+  # cooldown 0s: every export is recorded
+  - id: admin-data-export
+    when:
+      all:
+        - { field: request_path, op: regex, value: '(?i)^/admin/.*(export|download|\.(csv|xlsx?)$)' }
+        - { field: status, op: lt, value: 400 }
+    cooldown: 0s
+    notify: [console, ops]
+    message: "{remote_addr} exported data from the admin area: {request_method} {request_path} -> {status}"

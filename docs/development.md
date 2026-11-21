@@ -54,7 +54,7 @@ Receiving logs, matching and sending notifications are independent: slow notific
 | `src/main.rs` | Arguments, signals, socket / stdin input, main loop, systemd notification |
 | `deploy/` | The two systemd units (`httpdog.socket` holds the socket logs arrive on, `httpdog.service` runs the program), nginx config snippet, and the SELinux policy for systems where it is enforcing |
 | `tests/` | Starts the built binary the way systemd does, with the socket passed in, and checks that a restart keeps it (Linux only). `tests/data/` holds a secrets file with lines of every kind and what systemd makes of it |
-| `examples/` | The `combined` starter rules and 5 scenario templates |
+| `examples/` | The `combined` starter rules and 6 scenario templates |
 | `fuzz/` | Fuzz targets and the script that runs them |
 | `sample.log`, `sample.combined.log` | Sample logs for the smoke tests (one JSON, one `combined`) |
 | `Makefile` | Command shortcuts for development (`build`, `test`, `lint`, `smoke`, `ci` and so on) |

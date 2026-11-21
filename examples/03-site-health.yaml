@@ -1,16 +1,5 @@
-# Scenario 3: site health
-#
-# For: knowing the site is in trouble before users complain. It catches a dead backend, slow responses and failing health checks.
-#
-# Fields needed: host, request_method, request_uri, status, request_time
-# (request_path is request_uri without the query string; httpdog adds it)
-#
-# Tuning notes:
-#   - Set the thresholds against your normal traffic. On a low-traffic site lower count, or it never accumulates.
-#   - The 5xx rule and the 502/503/504 rule match the same requests on purpose:
-#     the first watches the overall error volume, the second watches for an unreachable backend with a more sensitive threshold.
-#   - request_time is the time nginx spends on the whole request, including sending the response to a slow client,
-#     so large downloads count as slow requests. Exclude such paths with not + prefix.
+# Scenario 3: site health. Set the thresholds against your normal traffic.
+# Docs: https://github.com/guanting112/httpdog/blob/main/docs/rules.md#using-the-rule-templates
 
 notifiers:
   console:
@@ -21,7 +10,6 @@ notifiers:
     secret_env: HTTPDOG_WEBHOOK_SECRET
 
 rules:
-  # Site-wide 5xx surge
   - id: upstream-5xx-burst
     when: { field: status, op: gte, value: 500 }
     threshold: { count: 50, window: 1m }
@@ -29,8 +17,6 @@ rules:
     notify: [ops]
     message: "5xx surge, latest: {request_method} {host}{request_path} -> {status}"
 
-  # Backend unreachable or timing out (502 Bad Gateway / 503 / 504 Gateway Timeout).
-  # Usually the application is down or restarting, so the threshold is more sensitive than the rule above
   - id: gateway-errors
     when: { field: status, op: in, value: [502, 503, 504] }
     threshold: { count: 10, window: 30s }
@@ -38,7 +24,7 @@ rules:
     notify: [ops]
     message: "Backend not responding, latest: {request_method} {host}{request_path} -> {status}"
 
-  # When several sites share one nginx, find which site is failing. Delete this rule if you have a single site
+  # Which site is failing, when several share one nginx
   - id: host-5xx
     when: { field: status, op: gte, value: 500 }
     group_by: host
@@ -47,7 +33,7 @@ rules:
     notify: [console]
     message: "High 5xx rate on {host}, latest: {request_path} -> {status}"
 
-  # A single very slow request (over 5 seconds), excluding the export feature that is slow by design
+  # /export/ is slow by design
   - id: slow-request
     when:
       all:
@@ -57,8 +43,6 @@ rules:
     notify: [console]
     message: "{request_path} took {request_time}s"
 
-  # Slow across the board: 30 requests over 2 seconds within a minute. One slow request may be a one-off;
-  # many usually mean trouble in the database or the backend
   - id: slow-burst
     when: { field: request_time, op: gt, value: 2 }
     threshold: { count: 30, window: 1m }
@@ -66,7 +50,6 @@ rules:
     notify: [ops]
     message: "Responses are slow across the board, latest: {request_path} took {request_time}s"
 
-  # The health check endpoint did not return 200. Use the path your load balancer or monitoring really calls
   - id: healthcheck-failing
     when:
       all:
@@ -76,8 +59,7 @@ rules:
     notify: [ops]
     message: "Health check failed: {host}{request_path} -> {status}"
 
-  # 499 is an nginx-only status code: the client gave up waiting and closed the connection.
-  # A burst usually means the backend is slow enough for users to give up, and it often shows before 5xx does
+  # 499: the client gave up waiting (nginx only)
   - id: client-abort-burst
     when: { field: status, op: eq, value: 499 }
     threshold: { count: 30, window: 1m }
