@@ -5,9 +5,9 @@
 # Apply:    systemctl reload httpdog (sends SIGHUP; a broken new file keeps the old rules)
 
 # Where logs arrive. nginx's access_log syslog:server= must point at the same place
-# (changing it needs a restart; a reload does not apply it).
+# (a reload cannot change it; to move to another address see docs/log-format.md).
 # This unix socket is the default, so the line can be left out. Only root and the web server's group can
-# write to it (deploy/httpdog.service sets that up), so other programs on the machine cannot send fake logs.
+# write to it (deploy/httpdog.socket sets that up), so other programs on the machine cannot send fake logs.
 # A UDP address such as 127.0.0.1:5514 works too, but anything that can reach it can send, and httpdog
 # prints a warning at every start
 listen: unix:/run/httpdog/httpdog.sock

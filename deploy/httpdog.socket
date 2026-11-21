@@ -1,0 +1,20 @@
+[Unit]
+Description=httpdog - the socket access logs arrive on
+
+[Socket]
+# The unix socket of the default `listen` in the rule file. systemd creates it, keeps it for as long as this
+# unit is active, and passes it to httpdog at every start. So a restart of httpdog keeps the same socket:
+# the web server stays connected, and the lines it sends in the meantime wait here until httpdog is back.
+# To use another path, change it here and in `listen`; httpdog refuses to start when the two differ
+ListenDatagram=/run/httpdog/httpdog.sock
+# Whoever can write to this socket can make httpdog raise alerts. These two lines let in root and one group,
+# the one nginx's workers run as, and nobody else. httpdog itself is not in that group and does not need to
+# be: it is handed the open socket, and never touches the file.
+# www-data is right for Debian / Ubuntu. On Fedora / Rocky Linux change it to nginx.
+SocketMode=0660
+SocketGroup=www-data
+# Stopping this unit takes the socket file away with it
+RemoveOnStop=yes
+
+[Install]
+WantedBy=sockets.target

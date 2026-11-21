@@ -18,10 +18,13 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use std::{
     fs,
     io::{self, BufRead, ErrorKind},
-    net::{SocketAddr, UdpSocket},
-    os::unix::{
-        fs::{FileTypeExt, PermissionsExt},
-        net::UnixDatagram,
+    net::{SocketAddr, ToSocketAddrs, UdpSocket},
+    os::{
+        fd::OwnedFd,
+        unix::{
+            fs::{FileTypeExt, PermissionsExt},
+            net::UnixDatagram,
+        },
     },
     path::{Path, PathBuf},
     process::exit,
@@ -120,6 +123,7 @@ fn main() {
     let (line_tx, line_rx) = mpsc::sync_channel::<String>(LINE_QUEUE);
     // Lines dropped by the input thread that the main loop has not collected yet. stdin mode never drops, so it stays 0
     let dropped = Arc::new(AtomicU64::new(0));
+    let mut held_by_systemd = false;
     if args.stdin {
         thread::spawn(move || read_stdin(line_tx));
         eprintln!(
@@ -127,13 +131,31 @@ fn main() {
             engine.rule_count()
         );
     } else {
-        let input = Input::open(&listen).unwrap_or_else(|e| {
-            eprintln!("cannot listen on {listen}: {e}");
-            exit(1);
-        });
+        // Under deploy/httpdog.socket systemd holds the socket and passes it at every start, so a restart of
+        // httpdog keeps the same socket. Started any other way, httpdog opens the socket itself
+        let input = match Input::from_systemd(&listen) {
+            Ok(Some(input)) => {
+                held_by_systemd = true;
+                input
+            }
+            Ok(None) => Input::open(&listen).unwrap_or_else(|e| {
+                eprintln!("cannot listen on {listen}: {e}");
+                exit(1);
+            }),
+            // The unit file and the rule file disagree: a restart would not change that
+            Err(e) => {
+                eprintln!("config error: {e}");
+                exit(EXIT_CONFIG);
+            }
+        };
         eprintln!(
-            "httpdog started: {} rule(s), listening on {listen}",
-            engine.rule_count()
+            "httpdog started: {} rule(s), listening on {listen}{}",
+            engine.rule_count(),
+            if held_by_systemd {
+                " (socket held by systemd)"
+            } else {
+                ""
+            }
         );
         if let Some(warning) = input.warning() {
             eprintln!("{warning}");
@@ -159,6 +181,15 @@ fn main() {
         if hup.swap(false, Ordering::Relaxed) {
             // A bad new rule file keeps the old rules: monitoring must not stop because of a config mistake
             match load(&args.config) {
+                // systemd holds the socket and passes the same one at every start, and httpdog does not start
+                // when `listen` names another. Taking these rules would leave a rule file that works until the
+                // next restart or reboot and then keeps httpdog down, so it is refused now, while someone is looking
+                Ok((_, new_listen)) if held_by_systemd && new_listen != listen => eprintln!(
+                    "reload failed, keeping the old rules: listen is now {new_listen} in the rule file, \
+                     but systemd holds the socket {listen} and a reload cannot change it. To move to another \
+                     address, change ListenDatagram= in httpdog.socket to the same one and restart \
+                     httpdog.socket; otherwise change listen back"
+                ),
                 Ok((new_engine, new_listen)) => {
                     engine = new_engine;
                     eprintln!(
@@ -243,6 +274,89 @@ impl Input {
         }
     }
 
+    /// The socket systemd passed to this process, if it passed one: deploy/httpdog.socket makes it do so.
+    /// The socket has to be the one `listen` in the rule file names. The web server is pointed at what the
+    /// rule file says, so with any other socket httpdog would run and receive nothing
+    fn from_systemd(listen: &Listen) -> Result<Option<Input>, String> {
+        let mut fds = sd_listen_fds::get().map_err(|e| format!("systemd socket: {e}"))?;
+        let fd = match fds.len() {
+            0 => return Ok(None),
+            1 => fds.remove(0).1,
+            n => {
+                return Err(format!(
+                    "systemd passed {n} sockets and httpdog takes one: \
+                     keep a single ListenDatagram= line in httpdog.socket"
+                ));
+            }
+        };
+        let input = match listen {
+            Listen::Unix(_) => Input::Unix(fd.into()),
+            Listen::Udp(_) => Input::Udp(fd.into()),
+        };
+        input.check_passed(listen).map_err(|e| {
+            format!(
+                "the socket systemd passed is not the one the rule file names, {listen}: {e}. \
+                 Make ListenDatagram= in httpdog.socket and listen in the rule file the same"
+            )
+        })?;
+        Ok(Some(input))
+    }
+
+    /// Nothing but its number is known about a passed socket, so ask the socket itself: is it bound to the
+    /// address in `listen`, and does it take datagrams
+    fn check_passed(&self, listen: &Listen) -> Result<(), String> {
+        // A socket of the other family cannot say its address in this one: that is how the wrong kind shows
+        match (self, listen) {
+            (Input::Unix(sock), Listen::Unix(path)) => {
+                let addr = sock
+                    .local_addr()
+                    .map_err(|_| "it is not a unix socket".to_string())?;
+                if addr.as_pathname() != Some(path.as_path()) {
+                    return Err(match addr.as_pathname() {
+                        Some(p) => format!("it is unix:{}", p.display()),
+                        None => "it has no path".into(),
+                    });
+                }
+            }
+            (Input::Udp(sock), Listen::Udp(addr)) => {
+                let local = sock
+                    .local_addr()
+                    .map_err(|_| "it is not a UDP socket".to_string())?;
+                let mut wanted = addr
+                    .to_socket_addrs()
+                    .map_err(|e| format!("cannot resolve {addr}: {e}"))?;
+                if !wanted.any(|a| a == local) {
+                    return Err(format!("it is {local}"));
+                }
+            }
+            _ => return Err("it is another kind of socket".into()),
+        }
+        // A stream socket (ListenStream=) has an address too, but every receive on it fails
+        match self.peek_now() {
+            Err(e) if e.kind() != ErrorKind::WouldBlock => {
+                Err(format!("it does not take datagrams ({e})"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Look at the next datagram without waiting for one and without taking it out of the queue.
+    /// On a socket that takes datagrams the answer is the datagram or "nothing yet" (WouldBlock)
+    fn peek_now(&self) -> io::Result<usize> {
+        // UnixDatagram::peek is not in stable Rust yet (rust-lang/rust#76923). UdpSocket::peek makes the same
+        // recv(MSG_PEEK) call, and a file descriptor does not care which Rust type holds it
+        let probe = match self {
+            Input::Unix(sock) => UdpSocket::from(OwnedFd::from(sock.try_clone()?)),
+            Input::Udp(sock) => sock.try_clone()?,
+        };
+        // The copy shares this setting with the socket itself, so it has to be put back:
+        // the input thread waits for datagrams
+        probe.set_nonblocking(true)?;
+        let peeked = probe.peek(&mut [0u8; 1]);
+        probe.set_nonblocking(false)?;
+        peeked
+    }
+
     /// UDP has no way to limit who sends, so using it is worth a line in the log at every start
     fn warning(&self) -> Option<String> {
         match self {
@@ -259,10 +373,10 @@ impl Input {
     }
 }
 
-/// Create the unix socket that receives logs. Sending to it needs write permission on the socket file,
-/// which is given to the owner and the group only (0660). The group is the one httpdog runs as, so at this
-/// point nobody else can send. deploy/httpdog.service then hands the file to the web server's group as root,
-/// which lets the web server in without putting httpdog in that group.
+/// Create the unix socket that receives logs: what httpdog does when systemd does not pass it one (started by
+/// hand, or by a unit file without deploy/httpdog.socket). Sending to the socket needs write permission on the
+/// socket file, which is given to the owner and the group only (0660). The group is the one httpdog runs as,
+/// so nobody else can send until someone gives the file to the web server's group.
 fn bind_unix(path: &Path) -> Result<UnixDatagram, String> {
     // A socket file left behind by an earlier run (after SIGKILL, say) makes bind fail, so it has to go first.
     // Remove it only when nothing receives on it any more, and never remove anything that is not a socket
@@ -290,8 +404,9 @@ fn bind_unix(path: &Path) -> Result<UnixDatagram, String> {
 
     let sock = UnixDatagram::bind(path).map_err(|e| match (e.kind(), path.parent()) {
         (ErrorKind::NotFound, Some(dir)) => format!(
-            "the directory {} does not exist. deploy/httpdog.service creates /run/httpdog; \
-             when starting httpdog another way, create the directory first or set listen to another path",
+            "the directory {} does not exist. Under systemd, deploy/httpdog.socket creates /run/httpdog \
+             and the socket in it; when starting httpdog another way, create the directory first or set \
+             listen to another path",
             dir.display()
         ),
         _ => e.to_string(),
@@ -473,6 +588,102 @@ mod tests {
         let dir = test_dir("nodir");
         let err = bind_unix(&dir.join("missing/s")).unwrap_err();
         assert!(err.contains("does not exist"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn passed_unix_socket_must_be_the_one_in_listen() {
+        let dir = test_dir("passed");
+        let path = dir.join("s");
+        let input = Input::Unix(UnixDatagram::bind(&path).unwrap());
+        assert_eq!(input.check_passed(&Listen::Unix(path.clone())), Ok(()));
+
+        // A datagram already waiting is left in the queue, and the socket still waits for the next one
+        let sender = UnixDatagram::unbound().unwrap();
+        sender.send_to(b"first", &path).unwrap();
+        assert_eq!(input.check_passed(&Listen::Unix(path.clone())), Ok(()));
+        let mut buf = [0u8; 16];
+        let n = input.recv(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"first");
+        let Input::Unix(sock) = &input else {
+            unreachable!()
+        };
+        sock.set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let started = Instant::now();
+        assert!(input.recv(&mut buf).is_err());
+        assert!(started.elapsed() >= Duration::from_millis(40));
+
+        let err = input
+            .check_passed(&Listen::Unix(dir.join("other")))
+            .unwrap_err();
+        assert_eq!(err, format!("it is unix:{}", path.display()));
+        let err = input
+            .check_passed(&Listen::Udp("127.0.0.1:5514".into()))
+            .unwrap_err();
+        assert_eq!(err, "it is another kind of socket");
+
+        let unnamed = Input::Unix(UnixDatagram::unbound().unwrap());
+        let err = unnamed.check_passed(&Listen::Unix(path)).unwrap_err();
+        assert_eq!(err, "it has no path");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn passed_stream_socket_is_refused() {
+        // What ListenStream= in place of ListenDatagram= would pass: the right path, the wrong kind of socket
+        let dir = test_dir("stream");
+        let path = dir.join("s");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let input = Input::Unix(OwnedFd::from(listener).into());
+        let err = input.check_passed(&Listen::Unix(path)).unwrap_err();
+        assert!(err.starts_with("it does not take datagrams"), "{err}");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let input = Input::Udp(OwnedFd::from(listener).into());
+        let err = input
+            .check_passed(&Listen::Udp(addr.to_string()))
+            .unwrap_err();
+        assert!(err.starts_with("it does not take datagrams"), "{err}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn passed_udp_socket_must_be_the_one_in_listen() {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = sock.local_addr().unwrap();
+        let input = Input::Udp(sock);
+        assert_eq!(input.check_passed(&Listen::Udp(addr.to_string())), Ok(()));
+        // The warning about UDP does not depend on who opened the socket
+        assert!(input.warning().unwrap().contains("listening on UDP"));
+
+        let err = input
+            .check_passed(&Listen::Udp("127.0.0.1:1".into()))
+            .unwrap_err();
+        assert_eq!(err, format!("it is {addr}"));
+        let err = input
+            .check_passed(&Listen::Unix("/run/httpdog/httpdog.sock".into()))
+            .unwrap_err();
+        assert_eq!(err, "it is another kind of socket");
+    }
+
+    #[test]
+    fn passed_socket_of_the_other_family_is_refused() {
+        // from_systemd wraps the socket as what `listen` says it should be, whatever systemd passed
+        let dir = test_dir("family");
+        let path = dir.join("s");
+        let unix = UnixDatagram::bind(&path).unwrap();
+        let as_udp = Input::Udp(OwnedFd::from(unix).into());
+        let err = as_udp
+            .check_passed(&Listen::Udp("127.0.0.1:5514".into()))
+            .unwrap_err();
+        assert_eq!(err, "it is not a UDP socket");
+
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let as_unix = Input::Unix(OwnedFd::from(udp).into());
+        let err = as_unix.check_passed(&Listen::Unix(path)).unwrap_err();
+        assert_eq!(err, "it is not a unix socket");
         fs::remove_dir_all(dir).unwrap();
     }
 

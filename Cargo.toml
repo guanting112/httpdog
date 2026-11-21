@@ -7,6 +7,10 @@ description = "Watches nginx / Apache access logs and sends alerts based on a ru
 
 [dependencies]
 regex = "1"
+# Takes the socket systemd holds for httpdog (deploy/httpdog.socket). Turning an inherited file descriptor
+# into a socket is unsafe in Rust and this crate forbids unsafe code, so that one step lives in this crate:
+# 142 lines, no dependencies of its own
+sd-listen-fds = "0.2"
 # HMAC-SHA256 for webhook signatures. ureq's TLS (rustls) already pulls in ring,
 # so this only refers to the same copy directly and adds no new crate
 ring = "0.17"

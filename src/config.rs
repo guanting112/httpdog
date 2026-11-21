@@ -42,13 +42,14 @@ pub struct OverloadDef {
 /// file permissions decide who may write to it, which UDP cannot do
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Listen {
-    /// `unix:/path`: a unix datagram socket, created by httpdog at startup
+    /// `unix:/path`: a unix datagram socket. systemd creates it and passes it on (deploy/httpdog.socket);
+    /// started any other way, httpdog creates it at startup
     Unix(PathBuf),
     /// `host:port`: UDP. Anything that can reach the address can send, so main.rs warns at startup
     Udp(String),
 }
 
-/// The directory comes from RuntimeDirectory= in deploy/httpdog.service
+/// The same path as ListenDatagram= in deploy/httpdog.socket
 pub const DEFAULT_SOCKET: &str = "/run/httpdog/httpdog.sock";
 
 /// Longest path a unix socket address holds on Linux: 108 bytes including the terminating NUL

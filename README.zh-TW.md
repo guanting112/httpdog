@@ -111,10 +111,11 @@ sha256sum --check --ignore-missing SHA256SUMS      # 應該顯示 httpdog-linux-
 sudo install -m 755 "httpdog-linux-$ARCH" /usr/local/bin/httpdog
 httpdog --version
 
-# 2. 範例規則檔與 systemd unit:抓跟執行檔同一個版本的
+# 2. 範例規則檔與兩個 systemd unit:抓跟執行檔同一個版本的
 RAW="https://raw.githubusercontent.com/guanting112/httpdog/v$(httpdog --version | cut -d' ' -f2)"
 curl -fsSLO "$RAW/rules.example.yaml"
 curl -fsSLO "$RAW/deploy/httpdog.service"
+curl -fsSLO "$RAW/deploy/httpdog.socket"
 sudo install -d /etc/httpdog
 sudo install -m 644 rules.example.yaml /etc/httpdog/rules.yaml
 
@@ -124,9 +125,9 @@ sudoedit /etc/httpdog/secrets.env      # 寫入 HTTPDOG_WEBHOOK_URL=https://<你
                                        # 以及 HTTPDOG_WEBHOOK_SECRET=<openssl rand -hex 32 產生的值>
 
 # 4. 交給 systemd 管理
-sudo install -m 644 httpdog.service /etc/systemd/system/
+sudo install -m 644 httpdog.service httpdog.socket /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now httpdog
+sudo systemctl enable --now httpdog      # 會連 httpdog.socket 一起啟用並啟動
 systemctl status httpdog
 ```
 
@@ -140,7 +141,8 @@ systemctl status httpdog
   gh attestation verify "httpdog-linux-$ARCH" -R guanting112/httpdog --bundle httpdog.sigstore.json
   ```
 
-- unit 檔假設 nginx 的 worker 以 `www-data` 群組執行,Ubuntu 與 Debian 都是這樣。其他系統(Fedora 與 Rocky Linux 是 `nginx`)要在第 4 步之前把 `httpdog.service` 裡的 `www-data` 改掉。SELinux 是 enforcing 的系統(這兩個發行版預設就是)還要多做一步。兩件事都寫在[誰可以送 log](#誰可以送-log)。
+- unit 檔有兩個:`httpdog.socket` 是 log 進來的那個 socket,由 systemd 建立並持有;`httpdog.service` 是程式本身。socket 在 systemd 手上,所以重啟 httpdog 不會掉 log。
+- `httpdog.socket` 假設 nginx 的 worker 以 `www-data` 群組執行,Ubuntu 與 Debian 都是這樣。其他系統(Fedora 與 Rocky Linux 是 `nginx`)要在第 4 步之前把 `httpdog.socket` 裡的 `www-data` 改掉。SELinux 是 enforcing 的系統(這兩個發行版預設就是)還要多做一步。兩件事都寫在[誰可以送 log](#誰可以送-log)。
 - 服務不需要事先建立帳號(unit 檔用了 `DynamicUser`)。`secrets.env` 由 systemd 以 root 讀取後才降權,服務本身碰不到那個檔案。
 - `examples/` 底下的規則範本在 repo 裡,不在 Release 的附件裡:用 `git clone`,或下載 Release 頁面上的 Source code 壓縮檔。
 
@@ -154,7 +156,7 @@ cargo build --release
 ./target/release/httpdog --version
 ```
 
-要安裝自己編譯的版本,把上面的第 1 步換成 `sudo install -m 755 target/release/httpdog /usr/local/bin/`;`rules.example.yaml` 與 `deploy/httpdog.service` 在 clone 下來的目錄裡就有。
+要安裝自己編譯的版本,把上面的第 1 步換成 `sudo install -m 755 target/release/httpdog /usr/local/bin/`;`rules.example.yaml` 與 `deploy/` 底下的兩個 unit 檔在 clone 下來的目錄裡就有。
 
 ## 3. 把 log 接進來
 
@@ -220,9 +222,9 @@ access_log syslog:server=unix:/run/httpdog/httpdog.sock,tag=nginx,nohostname htt
 
 ### 誰可以送 log
 
-httpdog 收到的每一行 log 都會照單全收,所以「誰送得進來」很重要。預設 log 經由 unix socket `/run/httpdog/httpdog.sock` 進來,unit 檔只開放給 root 與 nginx 的群組(`www-data`),機器上其他程式沒辦法餵假的 log 給 httpdog。
+httpdog 收到的每一行 log 都會照單全收,所以「誰送得進來」很重要。預設 log 經由 unix socket `/run/httpdog/httpdog.sock` 進來,`httpdog.socket` 只開放給 root 與 nginx 的群組(`www-data`),機器上其他程式沒辦法餵假的 log 給 httpdog。httpdog 自己不在那個群組裡:systemd 把開好的 socket 直接交給它,所以它不會因此讀得到 web 伺服器的檔案。
 
-- **nginx 用的是別的群組時**,把 `/etc/systemd/system/httpdog.service` 裡的 `www-data` 改成那個群組(Fedora 與 Rocky Linux 是 `nginx`),再執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog`。
+- **nginx 用的是別的群組時**,把 `/etc/systemd/system/httpdog.socket` 裡的 `www-data` 改成那個群組(Fedora 與 Rocky Linux 是 `nginx`),再執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket && sudo systemctl reload nginx`。
 - **SELinux 是 enforcing 時**(Fedora、RHEL、Rocky Linux 預設如此),要先安裝 httpdog 附的一小份政策檔,nginx 才寫得進這個 socket。它只放行這一個動作:
 
   ```bash
@@ -338,10 +340,11 @@ webhook 收到的內容長這樣:
 ```bash
 journalctl -u httpdog -f            # 即時看 log(告警、重試、reload 的結果都在這)
 sudo systemctl reload httpdog       # 套用新規則
-sudo systemctl restart httpdog && sudo systemctl reload nginx   # 改了 listen 或 secrets.env 之後
+sudo systemctl restart httpdog      # 改了 secrets.env,或裝了新版本之後
+sudo systemctl stop httpdog.socket httpdog      # 真的要停下來
 ```
 
-重啟 httpdog 之後記得一併 reload nginx。重啟會讓 httpdog 換一個新的 socket,不 reload 的話,nginx 的每個 worker 要先掉一行 log 才會找到新的。用 `systemctl reload httpdog` 套用新規則則不需要。
+重啟不會掉 log。socket 在 systemd 手上,不在 httpdog 手上,所以 nginx 的連線不會斷;httpdog 不在的那段時間送來的 log 會先排在 socket 裡,等它回來再讀(排得下幾百行,見 [docs/log-format.md](docs/log-format.md#the-unix-socket))。也因為這樣,只停 httpdog 是停不住的:下一行 log 進來,systemd 就會再把它叫起來。要停就連 `httpdog.socket` 一起停。
 
 **改規則的建議流程**:先檢查,再拿最近的 log 重播看會觸發幾次,最後才 reload。
 
@@ -374,14 +377,18 @@ sudo logger -u /run/httpdog/httpdog.sock -d -t nginx \
 
 | 現象 | 可能原因 |
 |---|---|
-| 完全沒有告警 | nginx 的 `server=` 與規則檔的 `listen` 不一致;nginx 的 worker 不在 unit 檔開放 socket 的那個群組裡(nginx 的 error log 會有 `Permission denied`),或 SELinux 是 enforcing 而政策檔還沒安裝(同樣是 `Permission denied`),見[誰可以送 log](#誰可以送-log);或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
-| log 出現 `warning: listening on UDP ...` | 規則檔的 `listen` 是 UDP 位址,連得到它的程式都能送假的 log 給 httpdog。拿掉 `listen` 那一行就會改用 unix socket,再把 nginx 的 `server=` 改成 `unix:/run/httpdog/httpdog.sock`,然後重啟 httpdog、reload nginx |
-| 起不來:`cannot listen on unix:/run/httpdog/httpdog.sock: the directory /run/httpdog does not exist` | unit 檔還是 0.1.0 的,它不會建立這個目錄;0.1.0 預設是聽 UDP。裝上現在的 `deploy/httpdog.service`,並把 nginx 指到 socket。想繼續用 UDP 的話,在規則檔寫 `listen: 127.0.0.1:5514` |
-| 起不來:`chgrp: invalid group: 'www-data'` | 這台機器的 nginx 用的是別的群組。改掉 unit 檔裡的 `www-data`,見[誰可以送 log](#誰可以送-log) |
+| 完全沒有告警 | nginx 的 `server=` 與規則檔的 `listen` 不一致;nginx 的 worker 不在 `httpdog.socket` 開放 socket 的那個群組裡(nginx 的 error log 會有 `Permission denied`),或 SELinux 是 enforcing 而政策檔還沒安裝(同樣是 `Permission denied`),見[誰可以送 log](#誰可以送-log);或 log 的格式與規則檔的 `format` 對不上(結束時的統計會顯示很多行 `unparseable`) |
+| log 出現 `warning: listening on UDP ...` | 規則檔的 `listen` 是 UDP 位址,連得到它的程式都能送假的 log 給 httpdog。要改回 unix socket,把寫了 UDP 位址的三個地方還原:拿掉 `listen` 那一行、把 `httpdog.socket` 的 `ListenDatagram=` 改回 `/run/httpdog/httpdog.sock`、把 nginx 的 `server=` 改成 `unix:/run/httpdog/httpdog.sock`。然後執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket && sudo systemctl reload nginx` |
+| reload 時出現 `reload failed, keeping the old rules: listen is now ...` | 規則檔寫的位址跟 systemd 持有的 socket 不一樣。reload 沒辦法讓 httpdog 換位址,而且照這份規則檔,下次重開機後 httpdog 會起不來。把 `listen` 改回來;真的要換位址的話,見 [docs/log-format.md](docs/log-format.md#the-unix-socket) |
+| 起不來:`config error: the socket systemd passed is not the one the rule file names` | 規則檔的 `listen` 與 `httpdog.socket` 的 `ListenDatagram=` 寫的位址不一樣。改成一樣,再執行 `sudo systemctl daemon-reload && sudo systemctl restart httpdog.socket`。用預設的 socket 時,規則檔完全不需要寫 `listen` |
+| 起不來:`cannot listen on unix:/run/httpdog/httpdog.sock: a socket is already there and cannot be checked: Permission denied` | unit 檔是現在的版本,執行檔卻是 0.2.3 或更舊的,它不知道 socket 在 systemd 手上。裝上跟 unit 檔同一個版本的執行檔 |
+| 起不來:`cannot listen on unix:/run/httpdog/httpdog.sock: the directory /run/httpdog does not exist` | unit 檔還是 0.1.0 的,它不會建立這個目錄;0.1.0 預設是聽 UDP。裝上現在的 `deploy/httpdog.service` 與 `deploy/httpdog.socket`,並把 nginx 指到 socket |
+| 起不來:`Unit httpdog.socket not found` | `httpdog.service` 是現在的版本,但沒有一起裝 `httpdog.socket`。把 `deploy/` 底下的兩個 unit 檔都裝上,再執行 `sudo systemctl daemon-reload` |
+| 起不來:`A dependency job for httpdog.service failed`,而且 `journalctl -u httpdog.socket` 有 `Failed to resolve group` | 這台機器的 nginx 用的是別的群組。改掉 `httpdog.socket` 裡的 `www-data`,見[誰可以送 log](#誰可以送-log) |
 | 規則應該要中卻沒中 | 欄位名稱與 `log_format` 的 key 不一致;或規則比對的是 `uri`,而 nginx 會把它換成 `/index.php` 或錯誤頁,這時該用 `request_path`(見 [docs/log-format.md](docs/log-format.md#things-to-watch-out-for)) |
 | 只通知一次就沒了 | 還在 `cooldown` 內,預設是 1 分鐘 |
 | log 出現 `killed by the OOM killer`,而且 httpdog 一直重啟 | httpdog 用到了 unit 檔設定的記憶體上限(`MemoryMax=256M`)。原因幾乎都是某條規則的 `group_by` 用了訪客可以任意決定的欄位(例如路徑),又剛好湧入大量不重複的值。改用值比較少的欄位分組(`remote_addr`)、縮短那條規則的 `window` 與 `cooldown`,或調高 `MemoryMax`;見 [docs/limits.md](docs/limits.md#known-limitations) |
-| 啟動後馬上停止、不再重啟 | 規則檔有錯(結束碼 78),看 `journalctl -u httpdog -n 20` |
+| 啟動後馬上停止、不再重啟 | 規則檔有錯(結束碼 78),看 `journalctl -u httpdog -n 20`。它停著的時候,第一行進來的 log 會讓 systemd 再試幾次,然後連 `httpdog.socket` 也一起放棄;所以修好規則檔之後要執行 `sudo systemctl start httpdog && sudo systemctl reload nginx` |
 | 同一個 IP 觸發所有人的門檻 | nginx 在代理後面,來源 IP 都是代理的 IP,要設定 `real_ip` |
 | log 出現 `falling behind, ... dropped so far`,或收到 `overload` 告警 | 流量超過處理速度,檢查是否有效能很差的 regex。log 裡的數字是啟動以來的累計,告警裡的是上一則告警之後的數量 |
 
